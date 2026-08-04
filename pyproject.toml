@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=70.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deskx"
+version = "0.1.0"
+description = "Desktop Data Transformation Tool — safely sanitize datasets before sharing."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+dependencies = [
+    "PySide6>=6.7,<7",
+    "pandas>=2.2,<3",
+    "openpyxl>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.1",
+    "pytest-qt>=4.4",
+    "pyinstaller>=6.11",
+]
+
+[project.scripts]
+deskx = "deskx.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+qt_api = "pyside6"
+
+[tool.coverage.run]
+source = ["src/deskx"]
+omit = ["src/deskx/gui/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

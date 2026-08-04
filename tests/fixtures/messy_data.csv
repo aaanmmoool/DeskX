@@ -1,0 +1,17 @@
+Employee ID,  First Name  ,Last Name,Email Address,Phone Number,Date of Birth,Salary,Department,Active,ZIP Code,Purchase Order,Notes
+EMP-001,  Alice  ,Johnson,alice.j@acmecorp.com,(555) 123-4567,01/15/1990,"$75,000.00",Engineering,Yes,90210,PO-2024-001,Top performer Q4
+EMP-002,Bob,Smith,bob.smith@gmail.com,555.234.5678,1985-03-22,"€62,500",Marketing,true,10001,PO-2024-002,"New hire, probation period"
+EMP-003, Charlie ,Williams,charlie.w@outlook.com,+1-555-345-6789,22-07-1992,85000,Engineering,1,94105-1234,PO-2024-003,
+EMP-004,Diana,Brown,diana.brown@acmecorp.com,5554567890,"Mar 5, 1988","$92,150.50",HR,Y,60601,PO-2024-004,Transferred from London office
+EMP-005,Eve,Davis,eve_davis@yahoo.com,(555) 567-8901,1995.11.30,"¥8,500,000",Engineering,yes,98101,PO-2024-005,Remote worker since 2020
+EMP-006,Frank,Wilson,frank@company.co.uk,+44 20 7946 0958,12/01/1991,"£55,000",Sales,TRUE,SW1A 1AA,PO-2024-006,Part-time contractor
+EMP-007,  Grace,Taylor,grace.taylor@acmecorp.com,555-678-9012,1993-08-14,"$110,000",Marketing,active,30301,PO-2024-007,
+,,,,,,,,,,,
+EMP-008,Hank ,Anderson,hank.a@acmecorp.com,(555)789-0123,"June 3, 1987","(45,000)",Engineering,No,02101,PO-2024-008,On medical leave
+EMP-003,Charlie,Williams,charlie.w@outlook.com,+1-555-345-6789,22-07-1992,85000,Engineering,1,94105-1234,PO-2024-003,Duplicate of row 3?
+EMP-009,Ivy,Thomas,ivy.t@example.com,555 890 1234,02/28/1996,"$72,000",HR,false,75201,PO-2024-009,Recently promoted
+,,,,,,,,,,,
+EMP-010,Jack,White,jack.white@acmecorp.com,(555) 901-2345,1989-12-25,"$88,000",Sales,on,33101,PO-2024-010,Referred by EMP-002
+EMP-011, Kate ,Harris,kate.h@company.com,555.012.3456,07-04-1994,"  $95,000  ",Engineering,True,20001,PO-2024-011,  Needs review  
+,,,,,,,,,,,
+EMP-012,Leo,Martin,leo.m@acmecorp.com,(555) 123-4568,"Jan 1, 2000","$67,500",Marketing,0,85001,PO-2024-012,Starting Jan 2025

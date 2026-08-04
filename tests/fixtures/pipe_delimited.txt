@@ -1,0 +1,6 @@
+customer_id|first_name|last_name|email|phone|city
+C001|Alice|Johnson|alice@example.com|(555) 111-2222|New York
+C002|Bob|Smith|bob@example.com|(555) 333-4444|Chicago
+C003|Charlie|Williams|charlie@example.com|(555) 555-6666|Los Angeles
+C004|Diana|Brown|diana@example.com|(555) 777-8888|Houston
+C005|Eve|Davis|eve@example.com|(555) 999-0000|Phoenix

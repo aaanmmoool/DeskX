@@ -1,0 +1,7 @@
+[
+  {"id": 1, "name": "Alice", "email": "alice@example.com", "age": 30, "salary": 50000.00},
+  {"id": 2, "name": "Bob", "email": "bob@example.com", "age": 25, "salary": 60000.00},
+  {"id": 3, "name": "Charlie", "email": "charlie@example.com", "age": 35, "salary": 75000.00},
+  {"id": 4, "name": "Diana", "email": "diana@example.com", "age": 28, "salary": 55000.00},
+  {"id": 5, "name": "Eve", "email": "eve@example.com", "age": 32, "salary": 80000.00}
+]

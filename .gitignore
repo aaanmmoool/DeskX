@@ -1,0 +1,55 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# PyInstaller
+*.spec
+
+# Coverage
+.coverage
+htmlcov/
+
+# pytest
+.pytest_cache/
+
+# DeskX app data (local)
+*.log
+*.report.json
+*.tmp
+*.temp
+recent_files.json
+
+# Local environment and databases
+.env
+.env.*
+*.sqlite
+*.db
+
+# Agent / IDE artifacts
+.gemini/
+.agents/
+brain/
+

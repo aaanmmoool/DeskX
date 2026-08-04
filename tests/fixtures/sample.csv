@@ -1,0 +1,6 @@
+id,name,email,age,salary
+1,Alice,alice@example.com,30,50000.00
+2,Bob,bob@example.com,25,60000.00
+3,Charlie,charlie@example.com,35,75000.00
+4,Diana,diana@example.com,28,55000.00
+5,Eve,eve@example.com,32,80000.00

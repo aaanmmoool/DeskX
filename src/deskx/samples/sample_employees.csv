@@ -1,0 +1,16 @@
+ID,Full Name,Email Address,SSN,Salary,Department,Hire Date
+101, Alice Smith ,alice.smith@example.com,123-45-6789,"$85,000",Engineering,05/14/2020
+102,Bob Jones,bob.j@example.org,234-56-7890,"$120,000",Marketing,2019-11-01
+103,Charlie Brown ,charlie@company.net,345-67-8901,"$65,000",Sales,03-22-2021
+104,Diana Prince,diana.prince@example.com,456-78-9012,"$145,000",Engineering,2018-07-15
+105,Evan Wright,evan.wright@example.org,567-89-0123,"$95,000",Marketing,09/10/2020
+106,Fiona Gallagher,fiona.g@example.com,678-90-1234,"$78,000",Sales,2022-01-19
+107,George Clark,george.clark@company.net,789-01-2345,"$110,000",Engineering,2017-12-01
+108,Hannah Abbott,hannah@example.com,890-12-3456,"$88,000",Marketing,04/05/2021
+109,Ian Malcolm,ian.malcolm@example.org,901-23-4567,"$130,000",Engineering,2016-06-30
+110,Julia Roberts,julia.r@company.net,012-34-5678,"$92,000",Sales,2020-08-14
+103,Charlie Brown ,charlie@company.net,345-67-8901,"$65,000",Sales,03-22-2021
+111,Kevin Bacon,kevin@example.com,123-99-8877,"$105,000",Marketing,2019-02-28
+112,Laura Croft,laura@company.net,234-88-7766,"$115,000",Engineering,2021-10-12
+,,,,,,
+113,Michael Scott,michael.scott@example.com,345-77-6655,"$99,000",Sales,2015-04-01
