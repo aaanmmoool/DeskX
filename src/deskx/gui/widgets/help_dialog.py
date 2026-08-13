@@ -1,250 +1,277 @@
-"""Help & User Guide Modal Dialog.
+"""Built-in user guide and privacy explainer.
 
-Provides an interactive built-in reference for first-time and business users,
-explaining workflow, transformations, privacy detection, and shortcuts.
+Both dialogs are read-only reference material rendered with the shared
+modal chrome, so they look and behave like every other DeskX dialog.
+The wording explains what the app already does — no feature described
+here is new.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QDialog,
-    QDialogButtonBox,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QScrollArea,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
+from PySide6.QtWidgets import QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
+
+from deskx.gui.theme import SPACE
+from deskx.gui.theme.icons import Icon
+from deskx.gui.widgets.components import (
+    Badge,
+    Card,
+    InfoNote,
+    SectionHeader,
+    label,
+    scroll_container,
+)
+from deskx.gui.widgets.modal import ModalDialog
+
+_QUICK_START = (
+    (
+        Icon.UPLOAD,
+        "1 · Choose a dataset",
+        "Drag a file onto the upload area or press Browse. DeskX reads "
+        "CSV, Excel, JSON, and delimited text files.",
+    ),
+    (
+        Icon.PREVIEW,
+        "2 · Check the preview",
+        "Confirm DeskX is reading the file the way you expect — the "
+        "header row, the worksheet, the separator — then page through "
+        "the data or search it.",
+    ),
+    (
+        Icon.TRANSFORM,
+        "3 · Add transformations",
+        "Pick rules from the catalog, or accept a suggestion for a "
+        "column DeskX flagged as sensitive. Each rule opens a small "
+        "dialog where you choose the columns and settings.",
+    ),
+    (
+        Icon.PIPELINE,
+        "4 · Review the pipeline",
+        "The Review tab shows the whole run as a list: the file coming "
+        "in, each step in order, and the file going out.",
+    ),
+    (
+        Icon.DOWNLOAD,
+        "5 · Choose where to save",
+        "Before anything is written, DeskX asks for the output name and "
+        "folder. It refuses to write over your source file, and never "
+        "silently replaces an existing output.",
+    ),
+    (
+        Icon.REPORTS,
+        "6 · Keep the report",
+        "Every run produces an audit report with SHA-256 hashes of both "
+        "files and a summary of what was applied.",
+    ),
+)
+
+_TRANSFORM_GROUPS = (
+    (
+        "Cleaning",
+        Icon.CLEAN,
+        (
+            ("Trim whitespace", "Removes stray spaces around values and column titles."),
+            ("Remove empty rows and columns", "Drops anything that is entirely blank."),
+            ("Remove duplicates", "Keeps one copy of each repeated row."),
+            ("Fill missing values", "Puts a value of your choice into blank cells."),
+        ),
+    ),
+    (
+        "Privacy",
+        Icon.SHIELD,
+        (
+            ("Mask", "Hides most of a value but leaves it recognizable — j***@example.com."),
+            ("Redact", "Replaces the value completely, so nothing is left to read."),
+            ("Hash", "Replaces a value with a one-way fingerprint. Equal values stay equal; nothing can be read back."),
+            ("Pseudonymize", "Swaps identifying values for consistent stand-in names or IDs."),
+        ),
+    ),
+    (
+        "Shaping",
+        Icon.GENERALIZE,
+        (
+            ("Rename columns", "Gives columns clearer titles."),
+            ("Reorder columns", "Moves the columns you care about to the front."),
+            ("Group numbers into bands", "Turns exact figures into ranges such as Low or High."),
+            ("Suppress rare values", "Folds categories that appear only a few times into “Other”."),
+        ),
+    ),
+)
+
+_SHORTCUTS = (
+    ("Ctrl + O", "Open a dataset"),
+    ("F1", "Open this guide"),
+    ("Enter", "Confirm the highlighted action in a dialog"),
+    ("Esc", "Close a dialog without changing anything"),
+    ("Tab", "Move between controls"),
 )
 
 
-class HelpDialog(QDialog):
-    """Built-in interactive user guide dialog."""
+class HelpDialog(ModalDialog):
+    """The built-in user guide."""
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("DeskX — User Guide & Quick Start")
-        self.setMinimumSize(640, 480)
-        self.resize(700, 520)
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        # Header title
-        header = QLabel("✦ DeskX Data Sanitizer Guide")
-        header.setStyleSheet("font-size: 20px; font-weight: 600;")
-        layout.addWidget(header)
-
-        subhead = QLabel(
-            "Welcome! DeskX helps you inspect, clean, and anonymize Excel and CSV data securely offline."
+        super().__init__(
+            title="User Guide",
+            subtitle="How DeskX prepares your data, in plain language.",
+            icon=Icon.HELP,
+            width=720,
+            primary_text="Got it",
+            parent=parent,
         )
-        subhead.setProperty("role", "caption")
-        subhead.setWordWrap(True)
-        layout.addWidget(subhead)
+        self.setWindowTitle("DeskX — User Guide")
+        self.cancel_button.setVisible(False)
+        self.resize(720, 620)
 
-        # Tabs
         tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.addTab(self._build_quick_start(), "Quick start")
+        tabs.addTab(self._build_transforms(), "Transformations")
+        tabs.addTab(self._build_privacy(), "Privacy")
+        tabs.addTab(self._build_shortcuts(), "Shortcuts")
+        self.content.addWidget(tabs, 1)
 
-        tabs.addTab(self._build_quick_start_tab(), "🚀 Quick Start")
-        tabs.addTab(self._build_transforms_tab(), "⚡ Transformations")
-        tabs.addTab(self._build_privacy_tab(), "🛡 Privacy & Detection")
-        tabs.addTab(self._build_shortcuts_tab(), "⌨ Shortcuts")
+    # ── Tabs ────────────────────────────────────────────────────────
 
-        layout.addWidget(tabs, stretch=1)
+    def _build_quick_start(self) -> QWidget:
+        page, col = _tab_page()
+        for icon, title, text in _QUICK_START:
+            card = Card(padding=SPACE.md, spacing=SPACE.xs, variant="cardFlat")
+            card.add(SectionHeader(title, icon))
+            card.add(label(text, "body", wrap=True))
+            col.addWidget(card)
+        col.addStretch()
+        return scroll_container(page)
 
-        # Bottom button box
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        btn_box.rejected.connect(self.accept)
-        layout.addWidget(btn_box)
-
-    def _build_scrollable_page(self, content_widget: QWidget) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(content_widget)
-        return scroll
-
-    def _build_quick_start_tab(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
-
-        steps = [
-            (
-                "1. Load Your Dataset",
-                "Click Browse or drag & drop any Excel (.xlsx), CSV (.csv), or Text (.txt) file onto the upload area. "
-                "You can also select from Recent Files or try a bundled Sample Dataset to experiment.",
-            ),
-            (
-                "2. Configure & Clean",
-                "On the configure screen, review your data in the live preview table. Use the right-hand panel to:\n"
-                "• Toggle columns on/off to include or drop them.\n"
-                "• Click '+ Add' to attach data cleaning rules (like Trim Whitespace or Deduplicate Rows).\n"
-                "• Click 'Edit' (✏) on any transformation card to preview its effect on live sample data.",
-            ),
-            (
-                "3. Protect Sensitive Data",
-                "DeskX automatically scans your headers and rows for sensitive PII (Emails, Names, SSNs, Credit Cards). "
-                "Use the yellow Sensitive Columns toolbar to apply one-click protection: Masking, Redaction, Hashing, or Pseudonymizing.",
-            ),
-            (
-                "4. Export & Audit",
-                "When ready, click 'Process & Export' to save your sanitized dataset. DeskX generates an accompanying "
-                "JSON compliance audit report logging every applied transformation.",
-            ),
-        ]
-
-        for title, desc in steps:
-            card = QFrame()
-            card.setProperty("role", "card")
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(14, 12, 14, 12)
-            card_layout.setSpacing(6)
-
-            lbl_title = QLabel(title)
-            lbl_title.setStyleSheet("font-weight: 600; font-size: 14px; color: #60A5FA;")
-            card_layout.addWidget(lbl_title)
-
-            lbl_desc = QLabel(desc)
-            lbl_desc.setWordWrap(True)
-            card_layout.addWidget(lbl_desc)
-
-            layout.addWidget(card)
-
-        layout.addStretch()
-        return self._build_scrollable_page(container)
-
-    def _build_transforms_tab(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
-
-        categories = [
-            (
-                "Data Cleaning",
-                "• Trim Whitespace: Removes leading/trailing spaces from text cells and column names.\n"
-                "• Remove Empty Rows/Columns: Drops rows or columns that are entirely empty.\n"
-                "• Remove Duplicates: Finds duplicate rows and keeps only the first or last occurrence.\n"
-                "• Fill Missing Values: Replaces empty cells with a custom value, mean, or median.",
-            ),
-            (
-                "Privacy & Security",
-                "• Mask Column: Replaces all but the last 4 characters with asterisks (e.g., *******1234).\n"
-                "• Redact Column: Replaces the entire cell value with [REDACTED].\n"
-                "• Hash Column: Generates a deterministic SHA-256 fingerprint of the value.\n"
-                "• Pseudonymize: Consistently maps unique names/IDs to realistic fictional aliases.",
-            ),
-            (
-                "Formatting & Transformations",
-                "• Rename Columns: Maps old header names to new names.\n"
-                "• Reorder Columns: Moves specified columns to the front of the dataset.\n"
-                "• Revenue Bands: Categorizes numeric values into Low, Medium, High, or Enterprise bands.\n"
-                "• Suppress Low Counts: Replaces rare categories occurring fewer than N times with 'Other'.",
-            ),
-        ]
-
-        for cat, text in categories:
-            card = QFrame()
-            card.setProperty("role", "card")
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(14, 12, 14, 12)
-            card_layout.setSpacing(6)
-
-            lbl_title = QLabel(cat)
-            lbl_title.setStyleSheet("font-weight: 600; font-size: 14px; color: #34D399;")
-            card_layout.addWidget(lbl_title)
-
-            lbl_desc = QLabel(text)
-            lbl_desc.setWordWrap(True)
-            card_layout.addWidget(lbl_desc)
-
-            layout.addWidget(card)
-
-        layout.addStretch()
-        return self._build_scrollable_page(container)
-
-    def _build_privacy_tab(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
-
-        info_card = QFrame()
-        info_card.setProperty("role", "card")
-        info_layout = QVBoxLayout(info_card)
-        info_layout.setContentsMargins(14, 12, 14, 12)
-        info_layout.setSpacing(8)
-
-        lbl1 = QLabel("Automatic PII & Sensitive Column Detection")
-        lbl1.setStyleSheet("font-weight: 600; font-size: 14px; color: #FBBF24;")
-        info_layout.addWidget(lbl1)
-
-        lbl2 = QLabel(
-            "Whenever you load a file, DeskX scans both column headers and cell values using pattern matching "
-            "and statistical heuristics to detect:\n\n"
-            "• Email Addresses (e.g., user@example.com)\n"
-            "• Person Names & Employee IDs\n"
-            "• Financial Information (Credit Cards, IBANs, Bank Accounts)\n"
-            "• Government IDs (SSN, Passport numbers)\n"
-            "• Phone Numbers & Postal Addresses\n\n"
-            "When sensitive columns are found, a warning banner appears in the sidebar. You can choose "
-            "a suggested action (Mask, Redact, Hash, Pseudonymize) from the dropdown to protect that column instantly."
-        )
-        lbl2.setWordWrap(True)
-        info_layout.addWidget(lbl2)
-
-        layout.addWidget(info_card)
-        layout.addStretch()
-        return self._build_scrollable_page(container)
-
-    def _build_shortcuts_tab(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        shortcuts = [
-            ("Ctrl + O", "Open file browse dialog"),
-            ("Ctrl + E / Ctrl + S", "Export and save processed dataset"),
-            ("F1", "Open this User Guide dialog"),
-            ("Escape", "Close active modal dialog or return to previous screen"),
-        ]
-
-        card = QFrame()
-        card.setProperty("role", "card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 12, 14, 12)
-        card_layout.setSpacing(10)
-
-        title = QLabel("Keyboard Shortcuts")
-        title.setStyleSheet("font-weight: 600; font-size: 14px; color: #A78BFA;")
-        card_layout.addWidget(title)
-
-        for key, desc in shortcuts:
-            row = QFrame()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 4, 0, 4)
-
-            k_lbl = QLabel(f"  {key}  ")
-            k_lbl.setStyleSheet(
-                "background-color: #2D313E; border: 1px solid #4B5563; "
-                "border-radius: 4px; font-family: monospace; font-weight: 600;"
+    def _build_transforms(self) -> QWidget:
+        page, col = _tab_page()
+        col.addWidget(
+            label(
+                "Every rule runs on a copy of your data. Your source file "
+                "is only ever read.",
+                "body",
+                wrap=True,
             )
-            k_lbl.setFixedWidth(140)
-            row_layout.addWidget(k_lbl)
+        )
+        for title, icon, entries in _TRANSFORM_GROUPS:
+            card = Card(padding=SPACE.md, spacing=SPACE.sm, variant="cardFlat")
+            card.add(SectionHeader(title, icon))
+            for name, description in entries:
+                card.add(label(name, "body"))
+                hint = label(description, "caption", wrap=True)
+                hint.setContentsMargins(SPACE.md, 0, 0, SPACE.xs)
+                card.add(hint)
+            col.addWidget(card)
+        col.addStretch()
+        return scroll_container(page)
 
-            d_lbl = QLabel(desc)
-            row_layout.addWidget(d_lbl, stretch=1)
+    def _build_privacy(self) -> QWidget:
+        page, col = _tab_page()
+        col.addWidget(_privacy_body())
+        col.addStretch()
+        return scroll_container(page)
 
-            card_layout.addWidget(row)
+    def _build_shortcuts(self) -> QWidget:
+        page, col = _tab_page()
+        card = Card(padding=SPACE.lg, spacing=SPACE.sm, variant="cardFlat")
+        card.add(SectionHeader("Keyboard", Icon.SETTINGS))
+        for keys, description in _SHORTCUTS:
+            row = QHBoxLayout()
+            row.setSpacing(SPACE.md)
+            chip = Badge(keys, "neutral")
+            chip.setMinimumWidth(96)
+            row.addWidget(chip)
+            row.addWidget(label(description, "body"), 1)
+            card.add_layout(row)
+        col.addWidget(card)
+        col.addStretch()
+        return scroll_container(page)
 
-        layout.addWidget(card)
-        layout.addStretch()
-        return self._build_scrollable_page(container)
+
+class PrivacyDialog(ModalDialog):
+    """A short explanation of how DeskX protects the user's data."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(
+            title="Privacy",
+            subtitle="What DeskX does with your files — and what it never does.",
+            icon=Icon.PRIVACY,
+            width=620,
+            primary_text="Close",
+            parent=parent,
+        )
+        self.setWindowTitle("DeskX — Privacy")
+        self.cancel_button.setVisible(False)
+        self.content.addWidget(_privacy_body())
+        self.content.addStretch()
+
+
+# ── Shared content ──────────────────────────────────────────────────
+
+
+def _privacy_body() -> QWidget:
+    """The privacy explanation, shared by both dialogs."""
+    holder = QWidget()
+    col = QVBoxLayout(holder)
+    col.setContentsMargins(0, 0, 0, 0)
+    col.setSpacing(SPACE.md)
+
+    col.addWidget(
+        InfoNote(
+            "DeskX makes no network requests. Your data never leaves this "
+            "computer.",
+            variant="success",
+            icon=Icon.LOCK,
+        )
+    )
+
+    protections = Card(padding=SPACE.md, spacing=SPACE.sm, variant="cardFlat")
+    protections.add(SectionHeader("How your file is handled", Icon.SHIELD))
+    for text in (
+        "The source file is opened read-only and is never rewritten.",
+        "Results are written to a temporary file first, then promoted only "
+        "once every step has succeeded.",
+        "A destination that would overwrite your source file is rejected "
+        "before processing starts.",
+        "Both files are SHA-256 hashed so you can prove afterwards which "
+        "file produced which result.",
+    ):
+        protections.add(label(f"·   {text}", "body", wrap=True))
+    col.addWidget(protections)
+
+    detection = Card(padding=SPACE.md, spacing=SPACE.sm, variant="cardFlat")
+    detection.add(
+        SectionHeader(
+            "Sensitive-column detection",
+            Icon.SEARCH,
+            "DeskX inspects column titles and sample values to flag data "
+            "that usually needs protecting.",
+        )
+    )
+    for text in (
+        "Email addresses and phone numbers",
+        "Names and employee identifiers",
+        "Financial details such as card and account numbers",
+        "Government identifiers and postal addresses",
+    ):
+        detection.add(label(f"·   {text}", "body", wrap=True))
+    detection.add(
+        label(
+            "Detection is a suggestion, not a guarantee. Always review the "
+            "flagged columns yourself.",
+            "caption",
+            wrap=True,
+        )
+    )
+    col.addWidget(detection)
+
+    return holder
+
+
+def _tab_page() -> tuple[QWidget, QVBoxLayout]:
+    """A padded, transparent page used inside the guide's tabs."""
+    page = QWidget()
+    page.setObjectName("pageRoot")
+    col = QVBoxLayout(page)
+    col.setContentsMargins(SPACE.lg, SPACE.lg, SPACE.lg, SPACE.lg)
+    col.setSpacing(SPACE.md)
+    return page, col

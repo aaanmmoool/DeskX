@@ -1,12 +1,8 @@
-"""Upload screen — first thing the user sees.
+"""Upload screen — step one of the workflow.
 
-A clean, centered layout with:
-* Big drag-and-drop zone
-* Browse button
-* Recent files list
-
-Output folder is automatically the same as the source file,
-so no folder picker is needed here.
+A single, uncrowded decision: which dataset do you want to work on?
+The drop zone dominates, browse and sample sit directly beneath it,
+and recently opened files are one click away.
 """
 
 from __future__ import annotations
@@ -16,23 +12,30 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
-    QFrame,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
-    QSizePolicy,
-    QSpacerItem,
     QVBoxLayout,
     QWidget,
 )
 
 from deskx.core.config import FILE_FILTER_STRING
+from deskx.core.utils import truncate_path
+from deskx.gui.theme import SIZE, SPACE
+from deskx.gui.theme.icons import Icon
+from deskx.gui.widgets.components import (
+    Button,
+    Card,
+    SectionHeader,
+    StepIndicator,
+    centered_page,
+    label,
+    scroll_container,
+)
 from deskx.gui.widgets.drag_drop_area import DragDropArea
+from deskx.gui.workflow import STEP_UPLOAD, WORKFLOW_STEPS
 from deskx.history.recent_files import RecentFilesManager
 from deskx.samples import get_sample_employee_dataset_path
-
 
 
 class UploadPage(QWidget):
@@ -56,104 +59,101 @@ class UploadPage(QWidget):
         self._setup_ui()
         self._refresh_recent_list()
 
+    # ── Public API ──────────────────────────────────────────────────
+
+    def refresh(self) -> None:
+        """Re-read the recent-files store."""
+        self._refresh_recent_list()
+
     # ── Setup ───────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        # Center everything in a max-width container
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column = QWidget()
+        column.setObjectName("pageRoot")
+        col = QVBoxLayout(column)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(SPACE.lg)
 
-        container = QWidget()
-        container.setMaximumWidth(680)
-        container.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        steps = StepIndicator(WORKFLOW_STEPS)
+        steps.set_current(STEP_UPLOAD)
+        col.addWidget(steps)
+
+        heading = QVBoxLayout()
+        heading.setSpacing(SPACE.xs)
+        heading.addWidget(label("Choose a dataset", "pageTitle"))
+        heading.addWidget(
+            label(
+                "Drop a file below to preview it, apply cleaning and privacy "
+                "rules, then save a sanitized copy.",
+                "subheading",
+                wrap=True,
+            )
         )
+        col.addLayout(heading)
 
-        root = QVBoxLayout(container)
-        root.setContentsMargins(40, 60, 40, 40)
-        root.setSpacing(0)
+        card = Card(padding=SPACE.xl, spacing=SPACE.lg, elevated=True)
 
-        # ── Heading ─────────────────────────────────────────────────
-        heading = QLabel("Upload a Dataset")
-        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heading.setProperty("role", "heading")
-        heading.setStyleSheet("font-size: 26px;")
-        root.addWidget(heading)
-
-        root.addSpacing(6)
-
-        subtitle = QLabel(
-            "Drop a file below to preview, transform, and sanitize your data."
-        )
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setProperty("role", "subheading")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
-
-        root.addSpacing(32)
-
-        # ── Drop zone ──────────────────────────────────────────────
         self._drop_area = DragDropArea()
         self._drop_area.file_dropped.connect(self._on_file_chosen)
-        root.addWidget(self._drop_area)
+        card.add(self._drop_area)
 
-        root.addSpacing(16)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(SPACE.sm)
+        buttons.addStretch()
 
-        # ── Browse & Sample buttons (centered) ──────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
-        btn_row.addStretch()
-
-        self._browse_btn = QPushButton("📁  Browse Files")
-        self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_btn.setMinimumHeight(44)
-        self._browse_btn.setMinimumWidth(160)
-        self._browse_btn.setProperty("role", "primary")
+        self._browse_btn = Button(
+            "Browse files",
+            icon=Icon.FOLDER_OPEN,
+            role="primary",
+            height=SIZE.control_height_lg,
+        )
+        self._browse_btn.setMinimumWidth(170)
         self._browse_btn.clicked.connect(self._on_browse)
-        btn_row.addWidget(self._browse_btn)
+        buttons.addWidget(self._browse_btn)
 
-        self._sample_btn = QPushButton("🎁  Try Sample Data")
-        self._sample_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sample_btn.setMinimumHeight(44)
-        self._sample_btn.setMinimumWidth(160)
-        self._sample_btn.setProperty("role", "ghost")
+        self._sample_btn = Button(
+            "Try sample data",
+            icon=Icon.TABLE,
+            role="ghost",
+            height=SIZE.control_height_lg,
+        )
+        self._sample_btn.setToolTip("Load a small demo dataset to explore DeskX")
         self._sample_btn.clicked.connect(self._on_load_sample)
-        btn_row.addWidget(self._sample_btn)
+        buttons.addWidget(self._sample_btn)
 
-        btn_row.addStretch()
-        root.addLayout(btn_row)
-
-        root.addSpacing(32)
+        buttons.addStretch()
+        card.add_layout(buttons)
+        col.addWidget(card)
 
         # ── Recent files ───────────────────────────────────────────
-        self._recent_section = QWidget()
-        recent_layout = QVBoxLayout(self._recent_section)
-        recent_layout.setContentsMargins(0, 0, 0, 0)
-        recent_layout.setSpacing(8)
-
-        recent_header = QLabel("Recently Opened")
-        recent_header.setProperty("role", "caption")
-        recent_header.setStyleSheet("font-weight: 600; text-transform: uppercase; letter-spacing: 1px;")
-        recent_layout.addWidget(recent_header)
+        self._recent_section = Card(padding=SPACE.xl, spacing=SPACE.md)
+        self._recent_section.add(
+            SectionHeader(
+                "Recently opened",
+                Icon.HISTORY,
+                "Double-click a file to open it again.",
+            )
+        )
 
         self._recent_list = QListWidget()
-        self._recent_list.setMaximumHeight(180)
-        self._recent_list.itemDoubleClicked.connect(
-            self._on_recent_clicked
-        )
-        recent_layout.addWidget(self._recent_list)
+        self._recent_list.setMaximumHeight(190)
+        self._recent_list.setSpacing(2)
+        self._recent_list.itemDoubleClicked.connect(self._on_recent_clicked)
+        self._recent_list.itemActivated.connect(self._on_recent_clicked)
+        self._recent_section.add(self._recent_list)
+        col.addWidget(self._recent_section)
 
-        root.addWidget(self._recent_section)
-        root.addStretch()
+        col.addStretch()
 
-        outer.addWidget(container)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(scroll_container(centered_page(column, max_width=880)))
 
     # ── Slots ───────────────────────────────────────────────────────
 
     def _on_browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select File", "", FILE_FILTER_STRING
+            self, "Select a dataset", "", FILE_FILTER_STRING
         )
         if path:
             self._on_file_chosen(path)
@@ -181,15 +181,15 @@ class UploadPage(QWidget):
         self._recent_section.setVisible(bool(entries))
 
         for entry in entries:
-            p = Path(entry.path)
-            display = f"{p.name}   —   {p.parent}"
-            item = QListWidgetItem(display)
+            path = Path(entry.path)
+            exists = path.is_file()
+            item = QListWidgetItem(
+                f"{path.name}      {truncate_path(path.parent, 48)}"
+            )
             item.setData(Qt.ItemDataRole.UserRole, entry.path)
-            if not p.is_file():
-                item.setForeground(
-                    self.palette().color(
-                        self.palette().currentColorGroup(),
-                        self.palette().ColorRole.PlaceholderText,
-                    )
-                )
+            item.setToolTip(
+                str(path) if exists else f"{path}\n\nThis file is no longer available."
+            )
+            if not exists:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
             self._recent_list.addItem(item)

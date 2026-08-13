@@ -1,19 +1,14 @@
-"""Configure & Preview screen — the main workspace.
+"""Configure screen — the main workspace.
 
-Replaces the old separate Preview + Results pages with a single
-unified screen that shows:
+One toolbar and three tabs, so the window is never crowded:
 
-  ┌────────────────────────────────────────────────────────┐
-  │ ← Back    file_name.csv (size)     ▶ Process & Save   │
-  ├────────────────────────┬───────────────────────────────┤
-  │                        │  Import Settings              │
-  │    Data Preview Table  │  Column Selector              │
-  │                        │  Transforms Pipeline          │
-  │                        │  Sensitive Data Alerts         │
-  │                        │                               │
-  └────────────────────────┴───────────────────────────────┘
-  │ Success / Error banner (appears after processing)      │
-  └────────────────────────────────────────────────────────┘
+* **Preview** — how DeskX reads the file, plus the data itself
+* **Transformations** — detected sensitive columns, the rule catalog,
+  and the pipeline being assembled
+* **Review** — a plain visual summary of what will happen
+
+The reading, detection, and transformation logic is unchanged; this
+module only decides how it is presented.
 """
 
 from __future__ import annotations
@@ -22,35 +17,49 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
     QComboBox,
-    QFrame,
+    QDialog,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QRadioButton,
-    QScrollArea,
-    QSizePolicy,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from deskx.adapters.adapter_registry import create_default_registry
-from deskx.core.config import MAX_PREVIEW_ROWS
-from deskx.core.utils import humanize_bytes
+from deskx.core.config import MAX_PREVIEW_ROWS, SANITIZED_SUFFIX
+from deskx.core.utils import build_output_filename, humanize_bytes
+from deskx.gui.theme import ColorPalette, SIZE, SPACE, palette
+from deskx.gui.theme.icons import Icon, get_icon, get_pixmap, icon_label
+from deskx.gui.widgets.column_select_dialog import ColumnSelectDialog
+from deskx.gui.widgets.components import (
+    Badge,
+    Button,
+    Card,
+    IconButton,
+    InfoNote,
+    SectionHeader,
+    StepIndicator,
+    Themed,
+    centered_page,
+    clear_layout,
+    label,
+    scroll_container,
+)
 from deskx.gui.widgets.file_table import DataFrameModel, FileTableView
+from deskx.gui.workflow import STEP_PREVIEW, WORKFLOW_STEPS
 from deskx.gui.widgets.transform_sidebar import TransformSidebar
+from deskx.gui.widgets.transform_summary_card import icon_for
 from deskx.processing.pipeline import TransformStep
 from deskx.processing.sensitive_detector import (
     SensitiveColumn,
     detect_sensitive_columns,
 )
+from deskx.processing.transform_catalog import get_transform_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +71,27 @@ _DELIMITERS = [
     ("Space", " "),
 ]
 
+_HEADER_CHOICES = [
+    ("First row is the header", 0),
+    ("Header is on a specific row", 1),
+    ("There is no header row", 2),
+]
 
-class ConfigurePage(QWidget):
-    """Preview + configure + process — all on one screen.
+_PAGE_SIZES = ["25", "50", "100", "500"]
+
+# Below this the toolbar needs the space for the file name and the CTA.
+_STEPS_MIN_WIDTH = 1080
+
+
+class ConfigurePage(QWidget, Themed):
+    """Preview, configure, and review — all on one screen.
 
     Signals
     -------
     back_requested()
-        Emitted when the user clicks the back button.
+        The user wants to pick a different file.
     process_requested()
-        Emitted when the user clicks Process & Save.
+        The user is ready to choose a destination and process.
     """
 
     back_requested = Signal()
@@ -82,438 +102,446 @@ class ConfigurePage(QWidget):
         self._registry = create_default_registry()
         self._df: pd.DataFrame | None = None
         self._source_path: Path | None = None
-        self._checkboxes: list[QCheckBox] = []
+        self._column_states: dict[str, bool] = {}
         self._sensitive_results: list[SensitiveColumn] = []
         self._current_page: int = 0
         self._setup_ui()
+        self._register_theme()
 
     # ── Public API ──────────────────────────────────────────────────
 
     def load_file(self, path: str) -> None:
-        """Load a file and populate all UI elements."""
+        """Load a file and populate every part of the workspace."""
         file_path = Path(path)
         self._source_path = file_path
 
-        # Update file info in toolbar
-        self._file_label.setText(f"  {file_path.name}")
+        self._file_name.setText(file_path.name)
+        self._file_name.setToolTip(str(file_path))
         try:
-            size = humanize_bytes(file_path.stat().st_size)
-            self._size_label.setText(size)
+            self._size_badge.setText(humanize_bytes(file_path.stat().st_size))
+            self._size_badge.setVisible(True)
         except OSError:
-            self._size_label.setText("")
+            self._size_badge.setVisible(False)
 
-        # Show/hide format-specific controls
         ext = file_path.suffix.lower()
+        self._format_badge.setText(ext.lstrip(".").upper())
         self._sheet_row.setVisible(ext == ".xlsx")
         self._delim_row.setVisible(ext == ".txt")
 
-        # Load sheet names for XLSX
         if ext == ".xlsx":
-            try:
-                adapter = self._registry.get(ext)
-                sheets = adapter.get_sheet_names(file_path)
-                self._sheet_combo.blockSignals(True)
-                self._sheet_combo.clear()
-                self._sheet_combo.addItems(sheets)
-                self._sheet_combo.blockSignals(False)
-            except Exception:
-                logger.exception("Failed to read sheet names")
-
-        # Auto-detect delimiter for TXT
+            self._load_sheet_names(file_path, ext)
         if ext == ".txt":
-            try:
-                adapter = self._registry.get(ext)
-                detected = adapter.detect_delimiter(file_path)
-                if detected:
-                    for i, (_, delim) in enumerate(_DELIMITERS):
-                        if delim == detected:
-                            self._delim_combo.blockSignals(True)
-                            self._delim_combo.setCurrentIndex(i)
-                            self._delim_combo.blockSignals(False)
-                            break
-            except Exception:
-                logger.exception("Failed to detect delimiter")
+            self._autodetect_delimiter(file_path, ext)
 
-        # Hide success/error banners
-        self._success_banner.setVisible(False)
         self._error_banner.setVisible(False)
+        self._tabs.setCurrentIndex(0)
+        self._steps.set_current(STEP_PREVIEW)
 
         self._reload_preview()
 
     def get_import_settings(self) -> dict:
-        """Return current import settings."""
-        settings = {}
-        settings["header_row"] = self._get_header_row()
+        """Return the current import settings for the processing job."""
+        settings = {"header_row": self._get_header_row()}
 
         if self._source_path and self._source_path.suffix.lower() == ".xlsx":
             settings["sheet_name"] = self._sheet_combo.currentText()
 
         if self._source_path and self._source_path.suffix.lower() == ".txt":
-            idx = self._delim_combo.currentIndex()
-            if 0 <= idx < len(_DELIMITERS):
-                settings["delimiter"] = _DELIMITERS[idx][1]
+            index = self._delim_combo.currentIndex()
+            if 0 <= index < len(_DELIMITERS):
+                settings["delimiter"] = _DELIMITERS[index][1]
 
         return settings
 
     def get_selected_columns(self) -> list[str]:
-        """Return the list of currently selected column names."""
-        return [
-            cb.property("col_name")
-            for cb in self._checkboxes
-            if cb.isChecked()
-        ]
+        """Return the columns the user chose to keep."""
+        return [name for name, keep in self._column_states.items() if keep]
 
     def get_transform_steps(self) -> list[TransformStep]:
-        """Return the configured transform pipeline."""
+        """Return the configured transformation pipeline."""
         return self._transform_sidebar.get_pipeline()
 
     def set_processing(self, running: bool) -> None:
-        """Toggle UI state during processing."""
+        """Toggle the workspace's interactive state during processing."""
         self._process_btn.setEnabled(not running)
-        self._process_btn.setText(
-            "⏳  Processing…" if running else "▶  Process & Save"
-        )
+        # "&&" renders as a literal ampersand instead of a mnemonic.
+        self._process_btn.setText("Processing…" if running else "Process && Save")
         self._back_btn.setEnabled(not running)
+        self._tabs.setEnabled(not running)
 
     def show_success(self, output_path: str, row_count: int | None) -> None:
-        """Show success banner after processing completes."""
-        name = Path(output_path).name
-        msg = f"✅  Saved as  {name}"
-        if row_count is not None:
-            msg += f"   ({row_count:,} rows)"
-        self._success_msg.setText(msg)
-        self._success_banner.setVisible(True)
+        """Kept for compatibility — results now live on their own screen."""
         self._error_banner.setVisible(False)
 
     def show_error(self, message: str) -> None:
-        """Show error banner."""
-        self._error_msg.setText(f"  {message}")
+        """Surface a processing failure inline, above the tabs."""
+        self._error_banner.set_message(message, "error")
         self._error_banner.setVisible(True)
-        self._success_banner.setVisible(False)
+
+    @property
+    def sensitive_columns(self) -> list[SensitiveColumn]:
+        return list(self._sensitive_results)
+
+    @property
+    def dataframe(self) -> pd.DataFrame | None:
+        return self._df
 
     # ── Setup ───────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(SPACE.xxl, SPACE.xl, SPACE.xxl, SPACE.lg)
+        root.setSpacing(SPACE.md)
 
-        # ═══ Toolbar ════════════════════════════════════════════════
-        toolbar = QFrame()
-        toolbar.setObjectName("configToolbar")
-        toolbar.setFixedHeight(50)
-        tb_layout = QHBoxLayout(toolbar)
-        tb_layout.setContentsMargins(16, 0, 16, 0)
-        tb_layout.setSpacing(12)
+        root.addWidget(self._build_toolbar())
 
-        # Back button
-        self._back_btn = QPushButton("←  Back")
-        self._back_btn.setProperty("role", "ghost")
-        self._back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._back_btn.setFixedHeight(34)
+        self._error_banner = InfoNote("", variant="error", icon=Icon.ERROR)
+        self._error_banner.setVisible(False)
+        root.addWidget(self._error_banner)
+
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.addTab(self._build_preview_tab(), "Preview")
+        self._tabs.addTab(self._build_transform_tab(), "Transformations")
+        self._tabs.addTab(self._build_review_tab(), "Review")
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+        root.addWidget(self._tabs, 1)
+
+    def _build_toolbar(self) -> QWidget:
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACE.md)
+
+        self._back_btn = Button("Back", icon=Icon.ARROW_LEFT, role="ghost")
+        self._back_btn.setToolTip("Choose a different file")
         self._back_btn.clicked.connect(self.back_requested.emit)
-        tb_layout.addWidget(self._back_btn)
+        row.addWidget(self._back_btn)
 
-        # File name + size
-        self._file_label = QLabel("  file.csv")
-        self._file_label.setStyleSheet("font-weight: 600; font-size: 14px;")
-        tb_layout.addWidget(self._file_label)
+        self._file_icon = icon_label(Icon.FILE, palette().primary, SIZE.icon_lg)
+        row.addWidget(self._file_icon)
 
-        self._size_label = QLabel("")
-        self._size_label.setProperty("role", "caption")
-        tb_layout.addWidget(self._size_label)
+        info_col = QVBoxLayout()
+        info_col.setContentsMargins(0, 0, 0, 0)
+        info_col.setSpacing(0)
+        self._file_name = label("No file loaded", "cardTitle")
+        info_col.addWidget(self._file_name)
 
-        self._stats_label = QLabel("")
-        self._stats_label.setProperty("role", "caption")
-        tb_layout.addWidget(self._stats_label)
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(SPACE.xs + 2)
+        self._format_badge = Badge("", "primary")
+        self._size_badge = Badge("", "neutral")
+        self._shape_badge = Badge("", "neutral")
+        for badge in (self._format_badge, self._size_badge, self._shape_badge):
+            meta_row.addWidget(badge)
+        meta_row.addStretch()
+        info_col.addLayout(meta_row)
+        row.addLayout(info_col)
 
-        tb_layout.addStretch()
+        row.addStretch()
 
-        # Process button
-        self._process_btn = QPushButton("▶  Process & Save")
-        self._process_btn.setProperty("role", "primary")
-        self._process_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._process_btn.setFixedHeight(38)
-        self._process_btn.setMinimumWidth(180)
+        self._steps = StepIndicator(WORKFLOW_STEPS)
+        self._steps.set_current(STEP_PREVIEW)
+        row.addWidget(self._steps)
+
+        self._process_btn = Button(
+            "Process && Save",
+            icon=Icon.PROCESS,
+            role="primary",
+            height=SIZE.control_height_lg,
+        )
+        self._process_btn.setMinimumWidth(170)
+        self._process_btn.setToolTip("Choose a destination, then run the pipeline")
         self._process_btn.clicked.connect(self.process_requested.emit)
-        tb_layout.addWidget(self._process_btn)
+        row.addWidget(self._process_btn)
 
-        root.addWidget(toolbar)
+        return bar
 
-        # Separator
-        sep = QFrame()
-        sep.setProperty("role", "separator")
-        sep.setFrameShape(QFrame.Shape.HLine)
-        root.addWidget(sep)
+    # ── Preview tab ─────────────────────────────────────────────────
 
-        # ═══ Main content ═══════════════════════════════════════════
-        content = QHBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(0)
+    def _build_preview_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("pageRoot")
+        col = QVBoxLayout(page)
+        col.setContentsMargins(SPACE.lg, SPACE.lg, SPACE.lg, SPACE.lg)
+        col.setSpacing(SPACE.md)
 
-        # ── Left: Preview table ─────────────────────────────────────
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(16, 12, 8, 12)
-        left_layout.setSpacing(8)
-
-        # Search Bar
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(6)
-        self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText(
-            "🔍 Search rows by text across all columns..."
-        )
-        self._search_edit.setClearButtonEnabled(True)
-        self._search_edit.textChanged.connect(
-            lambda: self._update_table_view(reset_page=True)
-        )
-        top_bar.addWidget(self._search_edit)
-        left_layout.addLayout(top_bar)
+        col.addWidget(self._build_import_bar())
 
         self._model = DataFrameModel()
         self._table = FileTableView()
         self._table.setModel(self._model)
-        left_layout.addWidget(self._table, stretch=1)
+        col.addWidget(self._table, 1)
 
-        # Pagination Toolbar
-        bot_bar = QHBoxLayout()
-        bot_bar.setSpacing(8)
-        lbl = QLabel("Rows per page:")
-        lbl.setProperty("role", "caption")
-        bot_bar.addWidget(lbl)
-        self._page_size_combo = QComboBox()
-        self._page_size_combo.addItems(["25", "50", "100", "500"])
-        self._page_size_combo.setCurrentText("50")
-        self._page_size_combo.setFixedWidth(70)
-        self._page_size_combo.currentTextChanged.connect(
-            lambda: self._update_table_view(reset_page=True)
+        col.addWidget(self._build_table_footer())
+        return page
+
+    def _build_import_bar(self) -> QWidget:
+        card = Card(padding=SPACE.md, spacing=SPACE.sm, variant="cardFlat")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACE.md)
+
+        row.addWidget(icon_label(Icon.SETTINGS, palette().text_secondary, SIZE.icon_md))
+        row.addWidget(label("How to read this file", "body"))
+
+        self._header_combo = QComboBox()
+        for text, _ in _HEADER_CHOICES:
+            self._header_combo.addItem(text)
+        self._header_combo.setToolTip(
+            "Tells DeskX which row holds your column titles."
         )
-        bot_bar.addWidget(self._page_size_combo)
-        bot_bar.addStretch()
-
-        self._prev_page_btn = QPushButton("← Prev")
-        self._prev_page_btn.setProperty("role", "ghost")
-        self._prev_page_btn.clicked.connect(self._on_prev_page)
-        bot_bar.addWidget(self._prev_page_btn)
-
-        self._page_label = QLabel("Page 1 of 1")
-        self._page_label.setProperty("role", "caption")
-        bot_bar.addWidget(self._page_label)
-
-        self._next_page_btn = QPushButton("Next →")
-        self._next_page_btn.setProperty("role", "ghost")
-        self._next_page_btn.clicked.connect(self._on_next_page)
-        bot_bar.addWidget(self._next_page_btn)
-        left_layout.addLayout(bot_bar)
-
-        content.addWidget(left, stretch=3)
-
-        # ── Right: Settings sidebar ─────────────────────────────────
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        right_scroll.setFixedWidth(320)
-        right_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(8, 12, 16, 12)
-        right_layout.setSpacing(12)
-
-        # ── Import settings ─────────────────────────────────────────
-        import_card = QFrame()
-        import_card.setProperty("role", "card")
-        import_layout = QVBoxLayout(import_card)
-        import_layout.setContentsMargins(14, 12, 14, 12)
-        import_layout.setSpacing(8)
-
-        import_title = QLabel("Import Settings")
-        import_title.setStyleSheet("font-weight: 600; font-size: 13px;")
-        import_layout.addWidget(import_title)
-
-        # Header row
-        header_row_widget = QHBoxLayout()
-        header_row_widget.setSpacing(6)
-        hl = QLabel("Header:")
-        hl.setProperty("role", "caption")
-        hl.setFixedWidth(50)
-        header_row_widget.addWidget(hl)
-
-        self._header_group = QButtonGroup(self)
-        self._header_first = QRadioButton("Row 1 (Standard)")
-        self._header_first.setChecked(True)
-        self._header_first.setToolTip("Use the first row as column titles")
-        self._header_specific = QRadioButton("Row #:")
-        self._header_specific.setToolTip("Use a specific row number as column titles")
-        self._header_none = QRadioButton("No Header")
-        self._header_none.setToolTip("Do not use any row as headers; auto-name columns 0, 1, 2...")
-        self._header_group.addButton(self._header_first, 0)
-        self._header_group.addButton(self._header_specific, 1)
-        self._header_group.addButton(self._header_none, 2)
+        self._header_combo.setMinimumWidth(200)
+        row.addWidget(self._header_combo)
 
         self._header_spin = QSpinBox()
-        self._header_spin.setMinimum(1)
-        self._header_spin.setMaximum(100)
+        self._header_spin.setRange(1, 100)
         self._header_spin.setValue(1)
-        self._header_spin.setFixedWidth(52)
+        self._header_spin.setPrefix("Row ")
+        self._header_spin.setFixedWidth(88)
         self._header_spin.setEnabled(False)
+        row.addWidget(self._header_spin)
 
-        header_row_widget.addWidget(self._header_first)
-        header_row_widget.addWidget(self._header_specific)
-        header_row_widget.addWidget(self._header_spin)
-        header_row_widget.addWidget(self._header_none)
-        header_row_widget.addStretch()
-        import_layout.addLayout(header_row_widget)
-
-        # Sheet selector (XLSX)
         self._sheet_row = QWidget()
-        sr_layout = QHBoxLayout(self._sheet_row)
-        sr_layout.setContentsMargins(0, 0, 0, 0)
-        sr_layout.setSpacing(6)
-        sl = QLabel("Sheet:")
-        sl.setProperty("role", "caption")
-        sl.setFixedWidth(50)
-        sr_layout.addWidget(sl)
+        sheet_layout = QHBoxLayout(self._sheet_row)
+        sheet_layout.setContentsMargins(0, 0, 0, 0)
+        sheet_layout.setSpacing(SPACE.xs + 2)
+        sheet_layout.addWidget(label("Sheet", "caption"))
         self._sheet_combo = QComboBox()
-        sr_layout.addWidget(self._sheet_combo)
+        self._sheet_combo.setMinimumWidth(140)
+        sheet_layout.addWidget(self._sheet_combo)
         self._sheet_row.setVisible(False)
-        import_layout.addWidget(self._sheet_row)
+        row.addWidget(self._sheet_row)
 
-        # Delimiter selector (TXT)
         self._delim_row = QWidget()
-        dr_layout = QHBoxLayout(self._delim_row)
-        dr_layout.setContentsMargins(0, 0, 0, 0)
-        dr_layout.setSpacing(6)
-        dl = QLabel("Delim:")
-        dl.setProperty("role", "caption")
-        dl.setFixedWidth(50)
-        dr_layout.addWidget(dl)
+        delim_layout = QHBoxLayout(self._delim_row)
+        delim_layout.setContentsMargins(0, 0, 0, 0)
+        delim_layout.setSpacing(SPACE.xs + 2)
+        delim_layout.addWidget(label("Separator", "caption"))
         self._delim_combo = QComboBox()
-        for label, _ in _DELIMITERS:
-            self._delim_combo.addItem(label)
-        dr_layout.addWidget(self._delim_combo)
+        self._delim_combo.setMinimumWidth(130)
+        for text, _ in _DELIMITERS:
+            self._delim_combo.addItem(text)
+        delim_layout.addWidget(self._delim_combo)
         self._delim_row.setVisible(False)
-        import_layout.addWidget(self._delim_row)
+        row.addWidget(self._delim_row)
 
-        right_layout.addWidget(import_card)
+        row.addStretch()
 
-        # Connect import setting changes
-        self._header_group.buttonClicked.connect(self._on_settings_changed)
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search all columns…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.setMinimumWidth(240)
+        self._search_edit.setMinimumHeight(SIZE.control_height)
+        self._search_edit.addAction(
+            _search_action(self), QLineEdit.ActionPosition.LeadingPosition
+        )
+        self._search_edit.textChanged.connect(
+            lambda: self._update_table_view(reset_page=True)
+        )
+        row.addWidget(self._search_edit)
+
+        card.add_layout(row)
+
+        self._header_combo.currentIndexChanged.connect(self._on_settings_changed)
         self._header_spin.valueChanged.connect(self._on_settings_changed)
         self._sheet_combo.currentIndexChanged.connect(self._on_settings_changed)
         self._delim_combo.currentIndexChanged.connect(self._on_settings_changed)
+        return card
 
-        # ── Column selector ─────────────────────────────────────────
-        col_card = QFrame()
-        col_card.setProperty("role", "card")
-        col_layout = QVBoxLayout(col_card)
-        col_layout.setContentsMargins(14, 12, 14, 12)
-        col_layout.setSpacing(6)
+    def _build_table_footer(self) -> QWidget:
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACE.sm)
 
-        col_header = QHBoxLayout()
-        col_title = QLabel("Columns")
-        col_title.setStyleSheet("font-weight: 600; font-size: 13px;")
-        col_header.addWidget(col_title)
+        self._columns_label = label("", "caption")
+        row.addWidget(self._columns_label)
 
-        self._col_count_label = QLabel("")
-        self._col_count_label.setProperty("role", "caption")
-        col_header.addStretch()
-        col_header.addWidget(self._col_count_label)
-        col_layout.addLayout(col_header)
+        choose = Button("Choose columns", icon=Icon.COLUMNS, role="ghost")
+        choose.setToolTip("Pick which columns end up in the sanitized copy")
+        choose.clicked.connect(self._open_column_picker)
+        row.addWidget(choose)
 
-        # Select all
-        self._select_all_cb = QCheckBox("Select All")
-        self._select_all_cb.setChecked(True)
-        self._select_all_cb.stateChanged.connect(self._on_select_all)
-        col_layout.addWidget(self._select_all_cb)
+        row.addStretch()
 
-        # Column checkboxes (scrollable)
-        self._cb_container = QWidget()
-        self._cb_layout = QVBoxLayout(self._cb_container)
-        self._cb_layout.setContentsMargins(0, 0, 0, 0)
-        self._cb_layout.setSpacing(1)
-        self._cb_layout.addStretch()
-
-        cb_scroll = QScrollArea()
-        cb_scroll.setWidgetResizable(True)
-        cb_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        cb_scroll.setMaximumHeight(200)
-        cb_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        row.addWidget(label("Rows per page", "caption"))
+        self._page_size_combo = QComboBox()
+        self._page_size_combo.addItems(_PAGE_SIZES)
+        self._page_size_combo.setCurrentText("50")
+        self._page_size_combo.setFixedWidth(76)
+        self._page_size_combo.currentTextChanged.connect(
+            lambda: self._update_table_view(reset_page=True)
         )
-        cb_scroll.setWidget(self._cb_container)
-        col_layout.addWidget(cb_scroll)
+        row.addWidget(self._page_size_combo)
 
-        # Sensitive data alerts
-        self._sensitive_frame = QFrame()
-        sens_layout = QVBoxLayout(self._sensitive_frame)
-        sens_layout.setContentsMargins(0, 6, 0, 0)
-        sens_layout.setSpacing(4)
-        sens_title = QLabel("⚠  Sensitive data detected")
-        sens_title.setStyleSheet("color: #FBBF24; font-weight: 600; font-size: 11px;")
-        sens_layout.addWidget(sens_title)
-        self._sensitive_list = QLabel("")
-        self._sensitive_list.setProperty("role", "caption")
-        self._sensitive_list.setWordWrap(True)
-        sens_layout.addWidget(self._sensitive_list)
-        self._sensitive_frame.setVisible(False)
-        col_layout.addWidget(self._sensitive_frame)
+        self._prev_page_btn = IconButton(Icon.CHEVRON_LEFT, "Previous page", 30)
+        self._prev_page_btn.clicked.connect(self._on_prev_page)
+        row.addWidget(self._prev_page_btn)
 
-        right_layout.addWidget(col_card)
+        self._page_label = label("Page 1 of 1", "caption")
+        self._page_label.setMinimumWidth(150)
+        self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(self._page_label)
 
-        # ── Transform sidebar ───────────────────────────────────────
+        self._next_page_btn = IconButton(Icon.CHEVRON_RIGHT, "Next page", 30)
+        self._next_page_btn.clicked.connect(self._on_next_page)
+        row.addWidget(self._next_page_btn)
+
+        return bar
+
+    # ── Transformations tab ─────────────────────────────────────────
+
+    def _build_transform_tab(self) -> QWidget:
         self._transform_sidebar = TransformSidebar()
-        self._transform_sidebar.setFixedWidth(290)
-        right_layout.addWidget(self._transform_sidebar)
+        self._transform_sidebar.pipeline_changed.connect(self._on_pipeline_changed)
 
-        right_layout.addStretch()
+        holder = QWidget()
+        holder.setObjectName("pageRoot")
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, SPACE.lg, 0, SPACE.lg)
+        col.setSpacing(0)
+        col.addWidget(self._transform_sidebar)
+        col.addStretch()
 
-        right_scroll.setWidget(right)
-        content.addWidget(right_scroll)
+        return scroll_container(
+            centered_page(holder, max_width=980, margins=(SPACE.xxl, 0, SPACE.xxl, 0))
+        )
 
-        root.addLayout(content, stretch=1)
+    # ── Review tab ──────────────────────────────────────────────────
 
-        # ═══ Success / Error banners ════════════════════════════════
-        self._success_banner = QFrame()
-        self._success_banner.setObjectName("successBanner")
-        self._success_banner.setFixedHeight(48)
-        sb_layout = QHBoxLayout(self._success_banner)
-        sb_layout.setContentsMargins(20, 0, 20, 0)
-        self._success_msg = QLabel("")
-        self._success_msg.setStyleSheet("font-weight: 600; font-size: 13px;")
-        sb_layout.addWidget(self._success_msg)
-        sb_layout.addStretch()
-        self._success_banner.setVisible(False)
-        root.addWidget(self._success_banner)
+    def _build_review_tab(self) -> QWidget:
+        holder = QWidget()
+        holder.setObjectName("pageRoot")
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, SPACE.lg, 0, SPACE.lg)
+        col.setSpacing(SPACE.md)
 
-        self._error_banner = QFrame()
-        self._error_banner.setObjectName("errorBanner")
-        self._error_banner.setFixedHeight(48)
-        eb_layout = QHBoxLayout(self._error_banner)
-        eb_layout.setContentsMargins(20, 0, 20, 0)
-        self._error_msg = QLabel("")
-        self._error_msg.setStyleSheet("font-weight: 600; font-size: 13px;")
-        eb_layout.addWidget(self._error_msg)
-        eb_layout.addStretch()
-        self._error_banner.setVisible(False)
-        root.addWidget(self._error_banner)
+        col.addWidget(
+            SectionHeader(
+                "What will happen",
+                Icon.PIPELINE,
+                "DeskX reads your file, runs these steps on a copy, and writes "
+                "a new file. The original is never modified.",
+                title_role="sectionTitle",
+            )
+        )
+
+        self._review_layout = QVBoxLayout()
+        self._review_layout.setSpacing(SPACE.sm)
+        col.addLayout(self._review_layout)
+
+        col.addStretch()
+
+        return scroll_container(
+            centered_page(holder, max_width=760, margins=(SPACE.xxl, 0, SPACE.xxl, 0))
+        )
+
+    def _rebuild_review(self) -> None:
+        clear_layout(self._review_layout)
+
+        if self._source_path is None:
+            return
+
+        rows = len(self._df) if self._df is not None else None
+        kept = len(self.get_selected_columns())
+        total = len(self._column_states)
+        detail = f"{rows:,} rows previewed" if rows is not None else ""
+        if total and kept < total:
+            detail += f"   ·   {kept} of {total} columns kept"
+
+        self._review_layout.addWidget(
+            _pipeline_node(
+                "INPUT",
+                self._source_path.name,
+                detail,
+                Icon.FILE,
+                "primary",
+            )
+        )
+
+        cards = self._transform_sidebar.pipeline_cards()
+        if not cards:
+            self._review_layout.addWidget(_arrow_row())
+            self._review_layout.addWidget(
+                _pipeline_node(
+                    "NO CHANGES",
+                    "Copy the data as-is",
+                    "Add a transformation to clean or protect values.",
+                    Icon.INFO,
+                    "text_secondary",
+                )
+            )
+        for card in cards:
+            metadata = get_transform_metadata(card.step.transform_type)
+            summary = card.friendly_params()
+            columns = card._format_columns()
+            detail = f"on {columns}"
+            if summary:
+                detail += f"   ·   {summary}"
+            self._review_layout.addWidget(_arrow_row())
+            self._review_layout.addWidget(
+                _pipeline_node(
+                    metadata.category.upper(),
+                    metadata.friendly_name,
+                    detail,
+                    icon_for(metadata),
+                    "secondary",
+                )
+            )
+
+        self._review_layout.addWidget(_arrow_row())
+        self._review_layout.addWidget(
+            _pipeline_node(
+                "OUTPUT",
+                build_output_filename(self._source_path, SANITIZED_SUFFIX),
+                "You choose the folder in the next step.",
+                Icon.DOWNLOAD,
+                "success",
+            )
+        )
 
     # ── Internal ────────────────────────────────────────────────────
 
+    def _load_sheet_names(self, file_path: Path, ext: str) -> None:
+        try:
+            adapter = self._registry.get(ext)
+            sheets = adapter.get_sheet_names(file_path)
+            self._sheet_combo.blockSignals(True)
+            self._sheet_combo.clear()
+            self._sheet_combo.addItems(sheets)
+            self._sheet_combo.blockSignals(False)
+        except Exception:
+            logger.exception("Failed to read sheet names")
+
+    def _autodetect_delimiter(self, file_path: Path, ext: str) -> None:
+        try:
+            adapter = self._registry.get(ext)
+            detected = adapter.detect_delimiter(file_path)
+            if not detected:
+                return
+            for index, (_, delimiter) in enumerate(_DELIMITERS):
+                if delimiter == detected:
+                    self._delim_combo.blockSignals(True)
+                    self._delim_combo.setCurrentIndex(index)
+                    self._delim_combo.blockSignals(False)
+                    break
+        except Exception:
+            logger.exception("Failed to detect delimiter")
+
     def _get_header_row(self) -> int | None:
-        checked_id = self._header_group.checkedId()
-        if checked_id == 0:
+        choice = _HEADER_CHOICES[self._header_combo.currentIndex()][1]
+        if choice == 0:
             return 0
-        elif checked_id == 1:
+        if choice == 1:
             return self._header_spin.value() - 1
-        else:
-            return None
+        return None
 
     def _on_settings_changed(self, *_args) -> None:
-        self._header_spin.setEnabled(self._header_group.checkedId() == 1)
+        self._header_spin.setEnabled(
+            _HEADER_CHOICES[self._header_combo.currentIndex()][1] == 1
+        )
         if self._source_path:
             self._reload_preview()
 
@@ -524,22 +552,52 @@ class ConfigurePage(QWidget):
         try:
             adapter = self._registry.get(self._source_path.suffix)
             kwargs = self.get_import_settings()
-            df = adapter.read_preview(
-                self._source_path, MAX_PREVIEW_ROWS, **kwargs
-            )
+            df = adapter.read_preview(self._source_path, MAX_PREVIEW_ROWS, **kwargs)
         except Exception as exc:
             logger.exception("Failed to load preview")
-            QMessageBox.warning(
-                self, "Load Error", f"Could not load file:\n\n{exc}"
-            )
+            self.show_error(f"DeskX could not read this file: {exc}")
             return
 
+        self._error_banner.setVisible(False)
         self._df = df
         self._transform_sidebar.set_sample_data(df)
+        self._sync_column_states(df)
         self._update_table_view(reset_page=True)
-        self._update_stats(df)
-        self._build_column_checkboxes(df)
+        self._update_shape_badge(df)
         self._run_sensitive_detection(df)
+        self._transform_sidebar.set_columns([str(c) for c in df.columns])
+        self._rebuild_review()
+
+    def _sync_column_states(self, df: pd.DataFrame) -> None:
+        """Keep previously excluded columns excluded across reloads."""
+        previous = dict(self._column_states)
+        self._column_states = {
+            str(column): previous.get(str(column), True) for column in df.columns
+        }
+        self._update_columns_label()
+
+    def _update_columns_label(self) -> None:
+        total = len(self._column_states)
+        kept = len(self.get_selected_columns())
+        if not total:
+            self._columns_label.setText("")
+        elif kept == total:
+            self._columns_label.setText(f"All {total} columns included")
+        else:
+            self._columns_label.setText(
+                f"{kept} of {total} columns included  ·  {total - kept} dropped"
+            )
+
+    def _open_column_picker(self) -> None:
+        if self._df is None:
+            return
+        dialog = ColumnSelectDialog(
+            self._df, self._column_states, self._sensitive_results, parent=self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._column_states = dialog.selection()
+            self._update_columns_label()
+            self._rebuild_review()
 
     def _on_prev_page(self) -> None:
         self._current_page = max(0, self._current_page - 1)
@@ -550,9 +608,10 @@ class ConfigurePage(QWidget):
         self._update_table_view(reset_page=False)
 
     def _update_table_view(self, reset_page: bool = True) -> None:
-        if self._df.empty:
-            self._model.update_dataframe(self._df)
-            self._page_label.setText("Page 1 of 1")
+        if self._df is None or self._df.empty:
+            if self._df is not None:
+                self._model.update_dataframe(self._df)
+            self._page_label.setText("No rows")
             self._prev_page_btn.setEnabled(False)
             self._next_page_btn.setEnabled(False)
             return
@@ -572,94 +631,94 @@ class ConfigurePage(QWidget):
         if reset_page or self._current_page >= total_pages:
             self._current_page = 0
 
-        start_idx = self._current_page * page_size
-        end_idx = start_idx + page_size
-        page_df = filtered_df.iloc[start_idx:end_idx]
-        self._model.update_dataframe(page_df)
+        start = self._current_page * page_size
+        self._model.update_dataframe(filtered_df.iloc[start : start + page_size])
 
         self._page_label.setText(
-            f"Page {self._current_page + 1} of {total_pages} ({len(filtered_df):,} rows)"
+            f"Page {self._current_page + 1} of {total_pages}  ·  "
+            f"{len(filtered_df):,} rows"
         )
         self._prev_page_btn.setEnabled(self._current_page > 0)
         self._next_page_btn.setEnabled(self._current_page < total_pages - 1)
 
-    def _update_stats(self, df: pd.DataFrame) -> None:
-        rows = len(df)
-        cols = len(df.columns)
-        self._stats_label.setText(
-            f"  {rows:,} rows  ×  {cols} columns"
+    def _update_shape_badge(self, df: pd.DataFrame) -> None:
+        self._shape_badge.setText(
+            f"{len(df):,} rows × {len(df.columns)} columns"
         )
-
-    def _build_column_checkboxes(self, df: pd.DataFrame) -> None:
-        for cb in self._checkboxes:
-            self._cb_layout.removeWidget(cb)
-            cb.deleteLater()
-        self._checkboxes.clear()
-
-        for i, col in enumerate(df.columns):
-            dtype = str(df[col].dtype)
-            missing = df[col].isna().sum()
-            label = col
-            if missing > 0:
-                label += f"  ({missing} missing)"
-
-            cb = QCheckBox(label)
-            cb.setChecked(True)
-            cb.setProperty("col_name", col)
-            cb.setToolTip(
-                f"Type: {dtype}\n"
-                f"Missing: {missing}/{len(df)}\n"
-                f"Unique: {df[col].nunique()}"
-            )
-            cb.stateChanged.connect(self._on_column_toggled)
-            self._cb_layout.insertWidget(
-                self._cb_layout.count() - 1, cb
-            )
-            self._checkboxes.append(cb)
-
-        self._select_all_cb.setChecked(True)
-        self._col_count_label.setText(f"{len(df.columns)} total")
-
-        # Update sidebar columns
-        self._transform_sidebar.set_columns(list(df.columns))
 
     def _run_sensitive_detection(self, df: pd.DataFrame) -> None:
         self._sensitive_results = detect_sensitive_columns(df)
+        self._transform_sidebar.set_sensitive_columns(self._sensitive_results)
 
-        if self._sensitive_results:
-            lines = []
-            for sc in self._sensitive_results[:6]:
-                conf = f"{sc.confidence:.0%}"
-                lines.append(f"• {sc.column_name} → {sc.category} ({conf})")
-            self._sensitive_list.setText("\n".join(lines))
-            self._sensitive_frame.setVisible(True)
-
-            # Push to transform sidebar
-            self._transform_sidebar.set_sensitive_columns(
-                self._sensitive_results
-            )
+        count = len(self._sensitive_results)
+        if count:
+            self._tabs.setTabText(1, f"Transformations  ({count} to review)")
         else:
-            self._sensitive_frame.setVisible(False)
+            self._tabs.setTabText(1, "Transformations")
 
-    def _on_select_all(self, state: int) -> None:
-        checked = state == Qt.CheckState.Checked.value
-        for cb in self._checkboxes:
-            cb.blockSignals(True)
-            cb.setChecked(checked)
-            cb.blockSignals(False)
+    def _on_pipeline_changed(self, _steps: list) -> None:
+        self._rebuild_review()
 
-    def _on_column_toggled(self) -> None:
-        all_checked = all(cb.isChecked() for cb in self._checkboxes)
-        self._select_all_cb.blockSignals(True)
-        self._select_all_cb.setChecked(all_checked)
-        self._select_all_cb.blockSignals(False)
+    def _on_tab_changed(self, index: int) -> None:
+        self._steps.set_current(STEP_PREVIEW + index)
+        if index == 2:
+            self._rebuild_review()
 
-        selected = sum(1 for cb in self._checkboxes if cb.isChecked())
-        total = len(self._checkboxes)
-        self._col_count_label.setText(
-            f"{selected}/{total}" if selected < total else f"{total} total"
-        )
+    def apply_theme(self, p: ColorPalette) -> None:
+        self._file_icon.setPixmap(get_pixmap(Icon.FILE, p.primary, SIZE.icon_lg))
 
-    @property
-    def sensitive_columns(self) -> list[SensitiveColumn]:
-        return list(self._sensitive_results)
+    def resizeEvent(self, event) -> None:
+        """Drop the breadcrumb on narrow windows rather than squash it."""
+        super().resizeEvent(event)
+        self._steps.setVisible(self.width() >= _STEPS_MIN_WIDTH)
+
+
+# ── Review helpers ──────────────────────────────────────────────────
+
+
+def _pipeline_node(
+    eyebrow: str,
+    title: str,
+    detail: str,
+    icon: str,
+    tone: str,
+) -> QWidget:
+    """One node in the review pipeline."""
+    card = Card(padding=SPACE.md, spacing=0)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(SPACE.md)
+
+    color = getattr(palette(), tone, palette().primary)
+    row.addWidget(icon_label(icon, color, SIZE.icon_lg), 0, Qt.AlignmentFlag.AlignTop)
+
+    col = QVBoxLayout()
+    col.setContentsMargins(0, 0, 0, 0)
+    col.setSpacing(1)
+    col.addWidget(label(eyebrow, "eyebrow"))
+    col.addWidget(label(title, "cardTitle"))
+    if detail:
+        col.addWidget(label(detail, "caption", wrap=True))
+    row.addLayout(col, 1)
+
+    card.add_layout(row)
+    return card
+
+
+def _arrow_row() -> QWidget:
+    """The connector drawn between two pipeline nodes."""
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(SPACE.xxl, 0, 0, 0)
+    row.setSpacing(0)
+    row.addWidget(icon_label(Icon.ARROW_DOWN, palette().text_tertiary, SIZE.icon_md))
+    row.addStretch()
+    holder.setFixedHeight(SIZE.icon_md + SPACE.xs)
+    return holder
+
+
+def _search_action(parent: QWidget) -> QAction:
+    """A leading search glyph for the preview search field."""
+    action = QAction(parent)
+    action.setIcon(get_icon(Icon.SEARCH, palette().text_tertiary, SIZE.icon_sm))
+    return action

@@ -1,10 +1,13 @@
-"""Colour palettes for dark and light themes.
+"""Colour palettes for the DeskX design system.
 
-Each palette is a plain dataclass so the stylesheet generator can
-access tokens by name without string parsing.
+Every colour used anywhere in the GUI comes from one of the two
+palettes defined here.  Widgets must never hard-code a hex value —
+they should read a token from :func:`get_palette` (or, preferably,
+let the generated stylesheet do it for them).
 
-The colours are inspired by Linear / Notion — muted, desaturated
-tones with high contrast where it matters.
+The light palette is the canonical DeskX identity: a near-white
+canvas, pure-white cards, indigo/violet primary, and a teal secondary
+used sparingly for highlights.
 """
 
 from __future__ import annotations
@@ -23,34 +26,51 @@ class ColorPalette:
     """Complete set of semantic colour tokens."""
 
     # ── Surfaces ────────────────────────────────────────────────────
-    bg_primary: str       # main window background
-    bg_secondary: str     # cards, panels
-    bg_tertiary: str      # nav rail, subtle sections
-    bg_elevated: str      # modals, tooltips
+    bg_primary: str       # app canvas
+    bg_secondary: str     # cards / panels
+    bg_tertiary: str      # subtle fills, inset sections
+    bg_elevated: str      # modals, popovers, tooltips
     bg_hover: str         # interactive hover state
     bg_active: str        # pressed / selected state
+    bg_sidebar: str       # navigation rail
 
     # ── Borders ─────────────────────────────────────────────────────
     border_subtle: str    # card outlines
     border_default: str   # inputs
-    border_strong: str    # focus rings
+    border_strong: str    # emphasised outlines
 
     # ── Text ────────────────────────────────────────────────────────
     text_primary: str     # headings, body
-    text_secondary: str   # captions, labels
+    text_secondary: str   # supporting copy
     text_tertiary: str    # placeholders, disabled
-    text_inverse: str     # text on accent buttons
+    text_muted: str       # eyebrow labels, captions
+    text_inverse: str     # text on filled accent surfaces
 
-    # ── Accent ──────────────────────────────────────────────────────
-    accent: str           # primary CTA
+    # ── Brand ───────────────────────────────────────────────────────
+    primary: str
+    primary_hover: str
+    primary_pressed: str
+    primary_subtle: str   # tinted background behind badges / selection
+    primary_border: str
+
+    secondary: str
+    secondary_subtle: str
+
+    # ``accent`` is kept as an alias of ``primary`` so existing code and
+    # stylesheet rules that reference it keep working.
+    accent: str
     accent_hover: str
-    accent_subtle: str    # light tint behind badges
+    accent_subtle: str
 
     # ── Semantic ────────────────────────────────────────────────────
     success: str
+    success_subtle: str
     warning: str
+    warning_subtle: str
     error: str
+    error_subtle: str
     info: str
+    info_subtle: str
 
     # ── Drag-and-drop ───────────────────────────────────────────────
     drop_zone_border: str
@@ -67,104 +87,144 @@ class ColorPalette:
     table_header_bg: str
     table_row_alt: str
     table_selection: str
+    table_grid: str
+
+    # ── Elevation (QGraphicsDropShadowEffect colour) ────────────────
+    shadow: str
+    shadow_strength: int  # alpha 0–255
+
+    # ── Misc ────────────────────────────────────────────────────────
+    overlay: str          # modal scrim
+    is_dark: bool
 
 
-# ── Palettes ────────────────────────────────────────────────────────
-
-DARK = ColorPalette(
-    # Surfaces
-    bg_primary="#0F1117",
-    bg_secondary="#16181D",
-    bg_tertiary="#1C1E26",
-    bg_elevated="#22252E",
-    bg_hover="#282B35",
-    bg_active="#2E3240",
-
-    # Borders
-    border_subtle="#262933",
-    border_default="#353845",
-    border_strong="#505466",
-
-    # Text
-    text_primary="#EDEEF0",
-    text_secondary="#9B9FAD",
-    text_tertiary="#6B6F7E",
-    text_inverse="#0F1117",
-
-    # Accent — soft indigo-blue
-    accent="#6C72CB",
-    accent_hover="#8186D8",
-    accent_subtle="rgba(108, 114, 203, 0.15)",
-
-    # Semantic
-    success="#34D399",
-    warning="#FBBF24",
-    error="#F87171",
-    info="#60A5FA",
-
-    # Drag-and-drop
-    drop_zone_border="#353845",
-    drop_zone_bg="#16181D",
-    drop_zone_active_border="#6C72CB",
-    drop_zone_active_bg="rgba(108, 114, 203, 0.08)",
-
-    # Scrollbar
-    scrollbar_bg="transparent",
-    scrollbar_handle="#353845",
-    scrollbar_handle_hover="#505466",
-
-    # Table
-    table_header_bg="#1C1E26",
-    table_row_alt="#16181D",
-    table_selection="rgba(108, 114, 203, 0.20)",
-)
+# ── Light — the canonical DeskX look ────────────────────────────────
 
 LIGHT = ColorPalette(
-    # Surfaces
-    bg_primary="#FFFFFF",
-    bg_secondary="#F8F9FA",
-    bg_tertiary="#F1F3F5",
+    bg_primary="#F5F5FA",
+    bg_secondary="#FFFFFF",
+    bg_tertiary="#F1F1F8",
     bg_elevated="#FFFFFF",
-    bg_hover="#E9ECEF",
-    bg_active="#DEE2E6",
+    bg_hover="#F0F0F7",
+    bg_active="#E7E7F2",
+    bg_sidebar="#FFFFFF",
 
-    # Borders
-    border_subtle="#E9ECEF",
-    border_default="#CED4DA",
-    border_strong="#ADB5BD",
+    border_subtle="#EAEAF2",
+    border_default="#DEDEE9",
+    border_strong="#C4C4D4",
 
-    # Text
-    text_primary="#1A1A2E",
-    text_secondary="#6C757D",
-    text_tertiary="#ADB5BD",
+    text_primary="#14141F",
+    text_secondary="#565669",
+    text_tertiary="#9494A8",
+    text_muted="#7A7A8F",
     text_inverse="#FFFFFF",
 
-    # Accent — soft indigo-blue
-    accent="#5B5FC7",
-    accent_hover="#4B4FB7",
-    accent_subtle="rgba(91, 95, 199, 0.10)",
+    primary="#6C5CE7",
+    primary_hover="#5D4DD8",
+    primary_pressed="#4F40C4",
+    primary_subtle="#EFEDFD",
+    primary_border="#D6D0FA",
 
-    # Semantic
-    success="#10B981",
-    warning="#F59E0B",
-    error="#EF4444",
-    info="#3B82F6",
+    secondary="#0FA9A0",
+    secondary_subtle="#E3F8F6",
 
-    # Drag-and-drop
-    drop_zone_border="#CED4DA",
-    drop_zone_bg="#F8F9FA",
-    drop_zone_active_border="#5B5FC7",
-    drop_zone_active_bg="rgba(91, 95, 199, 0.06)",
+    accent="#6C5CE7",
+    accent_hover="#5D4DD8",
+    accent_subtle="#EFEDFD",
 
-    # Scrollbar
+    success="#0F9D58",
+    success_subtle="#E4F6EC",
+    warning="#B76E00",
+    warning_subtle="#FDF1DF",
+    error="#D92D20",
+    error_subtle="#FDECEA",
+    info="#1E6FD9",
+    info_subtle="#E7F0FD",
+
+    drop_zone_border="#D6D0FA",
+    drop_zone_bg="#FBFAFF",
+    drop_zone_active_border="#6C5CE7",
+    drop_zone_active_bg="#F2F0FE",
+
     scrollbar_bg="transparent",
-    scrollbar_handle="#CED4DA",
-    scrollbar_handle_hover="#ADB5BD",
+    scrollbar_handle="#D6D6E2",
+    scrollbar_handle_hover="#B9B9CB",
 
-    # Table
-    table_header_bg="#F1F3F5",
-    table_row_alt="#F8F9FA",
-    table_selection="rgba(91, 95, 199, 0.12)",
+    table_header_bg="#F7F7FC",
+    table_row_alt="#FBFBFE",
+    table_selection="#EFEDFD",
+    table_grid="#EDEDF4",
+
+    shadow="#1A1A3A",
+    shadow_strength=28,
+
+    overlay="rgba(20, 20, 31, 0.42)",
+    is_dark=False,
+)
+
+
+# ── Dark — same system, inverted surfaces ───────────────────────────
+
+DARK = ColorPalette(
+    bg_primary="#0D0D14",
+    bg_secondary="#16161F",
+    bg_tertiary="#1D1D28",
+    bg_elevated="#1F1F2B",
+    bg_hover="#25252F",
+    bg_active="#2D2D3A",
+    bg_sidebar="#111119",
+
+    border_subtle="#262633",
+    border_default="#33333F",
+    border_strong="#494957",
+
+    text_primary="#EDEDF2",
+    text_secondary="#A6A6BA",
+    text_tertiary="#6E6E85",
+    text_muted="#8A8AA0",
+    text_inverse="#FFFFFF",
+
+    primary="#8B7CF6",
+    primary_hover="#9C8FF8",
+    primary_pressed="#7A6AE8",
+    primary_subtle="#211E3A",
+    primary_border="#3A3468",
+
+    secondary="#2DD4BF",
+    secondary_subtle="#12302F",
+
+    accent="#8B7CF6",
+    accent_hover="#9C8FF8",
+    accent_subtle="#211E3A",
+
+    success="#34D399",
+    success_subtle="#10291F",
+    warning="#FBBF24",
+    warning_subtle="#2E2410",
+    error="#F87171",
+    error_subtle="#301818",
+    info="#60A5FA",
+    info_subtle="#141F33",
+
+    drop_zone_border="#3A3468",
+    drop_zone_bg="#14141D",
+    drop_zone_active_border="#8B7CF6",
+    drop_zone_active_bg="#1B1930",
+
+    scrollbar_bg="transparent",
+    scrollbar_handle="#33333F",
+    scrollbar_handle_hover="#494957",
+
+    table_header_bg="#1A1A24",
+    table_row_alt="#14141D",
+    table_selection="#241F45",
+    table_grid="#242430",
+
+    shadow="#000000",
+    shadow_strength=110,
+
+    overlay="rgba(0, 0, 0, 0.58)",
+    is_dark=True,
 )
 
 

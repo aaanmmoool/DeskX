@@ -1,9 +1,17 @@
-"""Modal configuration dialog for data transformations.
+"""Modal configuration dialog for a single transformation.
 
-Replaces cramped inline sidebar forms with a spacious modal window:
-* Left Panel: Educational context (friendly title, explanation,
-  ASCII example, when to use, and prominent warning alert).
-* Right Panel: Column selector, parameter inputs, and live sample preview.
+Structure (shared with every other DeskX modal via
+:class:`~deskx.gui.widgets.modal.ModalDialog`):
+
+* header — friendly name, plain-English one-liner
+* explanation — what it does, plus a before/after example
+* columns — which fields the transformation applies to
+* settings — the transformation's own parameters
+* preview — the first five rows, transformed live
+* caveat — the catalog's warning, if the change is irreversible
+
+The dialog only *builds* :class:`TransformStep` objects; it never
+changes how a transformation is implemented.
 """
 
 from __future__ import annotations
@@ -13,36 +21,54 @@ from typing import Any
 
 import pandas as pd
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from deskx.gui.theme import SPACE
+from deskx.gui.theme.icons import Icon
+from deskx.gui.widgets.components import (
+    Button,
+    Card,
+    InfoNote,
+    label,
+)
+from deskx.gui.widgets.modal import ModalDialog
+from deskx.gui.widgets.transform_summary_card import icon_for
 from deskx.processing.pipeline import TransformStep, TransformType, execute_pipeline
 from deskx.processing.transform_catalog import get_transform_metadata
 
 logger = logging.getLogger(__name__)
 
+# Transformations that operate on the whole table rather than columns.
+_NON_COLUMN_TRANSFORMS = frozenset({
+    TransformType.TRIM_WHITESPACE,
+    TransformType.REMOVE_EMPTY_ROWS,
+    TransformType.REMOVE_EMPTY_COLUMNS,
+    TransformType.REMOVE_DUPLICATES,
+    TransformType.REMOVE_COLUMNS,
+    TransformType.RENAME_COLUMNS,
+    TransformType.REORDER_COLUMNS,
+})
 
-class TransformConfigDialog(QDialog):
-    """Modal window to configure a transformation step with rich education and preview."""
+_COLUMNS_PER_ROW = 3
+
+
+class TransformConfigDialog(ModalDialog):
+    """Configure one transformation before adding it to the pipeline."""
 
     def __init__(
         self,
@@ -52,7 +78,6 @@ class TransformConfigDialog(QDialog):
         existing_step: TransformStep | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
         self.transform_type = transform_type
         self.available_columns = available_columns
         self.sample_df = sample_df.head(5).copy() if sample_df is not None else None
@@ -62,43 +87,44 @@ class TransformConfigDialog(QDialog):
         self.column_checkboxes: list[QCheckBox] = []
         self.param_widgets: dict[str, Any] = {}
 
-        self.setWindowTitle(f"Configure Transformation — {self.metadata.friendly_name}")
-        self.setMinimumSize(860, 620)
-        self.resize(920, 680)
+        super().__init__(
+            title=self.metadata.friendly_name,
+            subtitle=self.metadata.one_liner,
+            icon=icon_for(self.metadata),
+            width=700,
+            primary_text="Done",
+            parent=parent,
+        )
+        self.setWindowTitle(f"Configure — {self.metadata.friendly_name}")
 
-        self._setup_ui()
+        self._build_explanation()
+        if self._needs_column_selector():
+            self._build_column_selector()
+        self._build_settings()
+        self._build_preview()
+        self._build_caveat()
+        self.content.addStretch()
+
         self._load_existing_values()
         self._update_preview()
 
     # ── Public API ──────────────────────────────────────────────────
 
     def get_steps(self) -> list[TransformStep]:
-        """Return the configured TransformStep(s)."""
+        """Return the configured :class:`TransformStep` objects."""
         tt = self.transform_type
         params = self._gather_params()
 
-        # Some transforms do not target specific columns
-        non_column_transforms = {
-            TransformType.TRIM_WHITESPACE,
-            TransformType.REMOVE_EMPTY_ROWS,
-            TransformType.REMOVE_EMPTY_COLUMNS,
-            TransformType.REMOVE_DUPLICATES,
-            TransformType.REMOVE_COLUMNS,
-            TransformType.RENAME_COLUMNS,
-            TransformType.REORDER_COLUMNS,
-        }
-
-        if tt in non_column_transforms:
+        if tt in _NON_COLUMN_TRANSFORMS:
             return [TransformStep(transform_type=tt, params=params)]
 
-        # For column-specific transforms, generate one step per checked column
         selected_cols = [
             cb.property("col_name")
             for cb in self.column_checkboxes
             if cb.isChecked()
         ]
         if not selected_cols and self.available_columns:
-            # Fallback if none checked: use first available
+            # Fallback if none checked: use the first available column.
             selected_cols = [self.available_columns[0]]
 
         steps = []
@@ -108,207 +134,123 @@ class TransformConfigDialog(QDialog):
             steps.append(TransformStep(transform_type=tt, params=step_params))
         return steps
 
-    # ── UI Setup ────────────────────────────────────────────────────
+    # ── Sections ────────────────────────────────────────────────────
 
-    def _setup_ui(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(20)
+    def _build_explanation(self) -> None:
+        card = Card(padding=SPACE.lg, spacing=SPACE.sm, variant="inset")
+        card.add(label(self.metadata.what_it_does, "body", wrap=True))
 
-        # ═══ Left Panel: Educational Context ════════════════════════
-        left_card = QFrame()
-        left_card.setProperty("role", "card")
-        left_card.setFixedWidth(340)
-        left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(18, 18, 18, 18)
-        left_layout.setSpacing(12)
+        example = QFrame()
+        example.setProperty("role", "card")
+        row = QHBoxLayout(example)
+        row.setContentsMargins(SPACE.md, SPACE.sm + 2, SPACE.md, SPACE.sm + 2)
+        row.setSpacing(SPACE.md)
 
-        title = QLabel(self.metadata.friendly_name)
-        title.setProperty("role", "heading")
-        title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        left_layout.addWidget(title)
+        before = label(self.metadata.example_in, "mono")
+        before.setToolTip(self.metadata.example_visual)
+        row.addWidget(before, 1)
 
-        cat_badge = QLabel(f"Category: {self.metadata.category}")
-        cat_badge.setProperty("role", "caption")
-        cat_badge.setStyleSheet("color: #6C72CB; font-weight: 600; text-transform: uppercase;")
-        left_layout.addWidget(cat_badge)
+        arrow = label("→", "body", tone="primary")
+        row.addWidget(arrow, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        one_liner = QLabel(self.metadata.one_liner)
-        one_liner.setProperty("role", "subheading")
-        one_liner.setWordWrap(True)
-        left_layout.addWidget(one_liner)
+        after = label(self.metadata.example_out, "mono", tone="success")
+        after.setToolTip(self.metadata.example_visual)
+        row.addWidget(after, 1)
 
-        what_title = QLabel("What it does")
-        what_title.setStyleSheet("font-weight: 600; font-size: 13px; margin-top: 6px;")
-        left_layout.addWidget(what_title)
+        card.add(example)
+        card.add(label(f"When to use   ·   {self.metadata.when_to_use}", "caption", wrap=True))
+        self.content.addWidget(card)
 
-        what_desc = QLabel(self.metadata.what_it_does)
-        what_desc.setWordWrap(True)
-        what_desc.setProperty("role", "caption")
-        left_layout.addWidget(what_desc)
+    def _build_column_selector(self) -> None:
+        self.content.addWidget(label("COLUMNS", "eyebrow"))
 
-        ex_title = QLabel("Example")
-        ex_title.setStyleSheet("font-weight: 600; font-size: 13px; margin-top: 6px;")
-        left_layout.addWidget(ex_title)
+        card = Card(padding=SPACE.md, spacing=SPACE.sm)
 
-        ex_box = QTextEdit()
-        ex_box.setReadOnly(True)
-        ex_box.setText(self.metadata.example_visual)
-        ex_box.setMaximumHeight(115)
-        ex_box.setStyleSheet(
-            "background-color: #0F1117; color: #34D399; font-family: 'Consolas', monospace; font-size: 12px; padding: 8px; border-radius: 6px;"
-        )
-        left_layout.addWidget(ex_box)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(SPACE.xs)
+        header.addWidget(label("Apply this to", "body"))
+        header.addStretch()
 
-        when_title = QLabel("When to use")
-        when_title.setStyleSheet("font-weight: 600; font-size: 13px; margin-top: 6px;")
-        left_layout.addWidget(when_title)
+        select_all = Button("Select all", role="link")
+        select_all.clicked.connect(self._select_all_cols)
+        header.addWidget(select_all)
 
-        when_desc = QLabel(self.metadata.when_to_use)
-        when_desc.setWordWrap(True)
-        when_desc.setProperty("role", "caption")
-        left_layout.addWidget(when_desc)
+        clear_all = Button("Clear", role="link")
+        clear_all.clicked.connect(self._deselect_all_cols)
+        header.addWidget(clear_all)
+        card.add_layout(header)
 
-        # Warning Alert Box
-        warn_box = QFrame()
-        warn_box.setObjectName("warningBox")
-        warn_box.setStyleSheet(
-            "background-color: rgba(251, 191, 36, 0.12); border: 1px solid #FBBF24; border-radius: 8px; padding: 10px;"
-        )
-        warn_layout = QVBoxLayout(warn_box)
-        warn_layout.setContentsMargins(10, 8, 10, 8)
-        warn_layout.setSpacing(4)
-        warn_header = QLabel("⚠ Potential Warning")
-        warn_header.setStyleSheet("color: #FBBF24; font-weight: 600; font-size: 12px;")
-        warn_layout.addWidget(warn_header)
-        warn_text = QLabel(self.metadata.warning)
-        warn_text.setWordWrap(True)
-        warn_text.setStyleSheet("color: #FEE2E2; font-size: 12px;")
-        warn_layout.addWidget(warn_text)
-        left_layout.addWidget(warn_box)
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(SPACE.md)
+        grid.setVerticalSpacing(SPACE.xs)
 
-        left_layout.addStretch()
-        root.addWidget(left_card)
+        for index, col in enumerate(self.available_columns):
+            checkbox = QCheckBox(str(col))
+            checkbox.setChecked(self._is_col_initially_checked(col))
+            checkbox.setProperty("col_name", col)
+            checkbox.setToolTip(str(col))
+            checkbox.stateChanged.connect(lambda *_: self._update_preview())
+            grid.addWidget(
+                checkbox, index // _COLUMNS_PER_ROW, index % _COLUMNS_PER_ROW
+            )
+            self.column_checkboxes.append(checkbox)
 
-        # ═══ Right Panel: Configuration & Preview ═══════════════════
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(16)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setMaximumHeight(120)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(container)
+        card.add(scroll)
 
-        # Section 1: Column Selector (if applicable)
-        if self._needs_column_selector():
-            col_section = QFrame()
-            col_section.setProperty("role", "card")
-            col_layout = QVBoxLayout(col_section)
-            col_layout.setContentsMargins(14, 12, 14, 12)
-            col_layout.setSpacing(8)
+        self.content.addWidget(card)
 
-            col_header = QHBoxLayout()
-            col_lbl = QLabel("1. Select Target Column(s)")
-            col_lbl.setStyleSheet("font-weight: 600; font-size: 14px;")
-            col_header.addWidget(col_lbl)
-            col_header.addStretch()
+    def _build_settings(self) -> None:
+        rows = QVBoxLayout()
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(SPACE.sm)
+        self._build_param_controls(rows)
 
-            select_all_btn = QPushButton("Select All")
-            select_all_btn.setProperty("role", "ghost")
-            select_all_btn.setFixedHeight(26)
-            select_all_btn.clicked.connect(self._select_all_cols)
-            col_header.addWidget(select_all_btn)
+        if not self.param_widgets:
+            return
 
-            deselect_all_btn = QPushButton("Deselect All")
-            deselect_all_btn.setProperty("role", "ghost")
-            deselect_all_btn.setFixedHeight(26)
-            deselect_all_btn.clicked.connect(self._deselect_all_cols)
-            col_header.addWidget(deselect_all_btn)
-            col_layout.addLayout(col_header)
+        self.content.addWidget(label("SETTINGS", "eyebrow"))
+        card = Card(padding=SPACE.md, spacing=SPACE.sm)
+        card.add_layout(rows)
+        self.content.addWidget(card)
 
-            col_scroll = QScrollArea()
-            col_scroll.setWidgetResizable(True)
-            col_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            col_scroll.setMaximumHeight(140)
+    def _build_preview(self) -> None:
+        if self.sample_df is None or self.sample_df.empty:
+            self.preview_table = QTableWidget()
+            self.preview_table.setVisible(False)
+            return
 
-            cb_container = QWidget()
-            cb_layout = QVBoxLayout(cb_container)
-            cb_layout.setContentsMargins(4, 4, 4, 4)
-            cb_layout.setSpacing(4)
-
-            for col in self.available_columns:
-                cb = QCheckBox(col)
-                cb.setChecked(self._is_col_initially_checked(col))
-                cb.setProperty("col_name", col)
-                cb.stateChanged.connect(lambda: self._update_preview())
-                cb_layout.addWidget(cb)
-                self.column_checkboxes.append(cb)
-
-            cb_layout.addStretch()
-            col_scroll.setWidget(cb_container)
-            col_layout.addWidget(col_scroll)
-            right_layout.addWidget(col_section)
-
-        # Section 2: Parameter Inputs
-        param_section = QFrame()
-        param_section.setProperty("role", "card")
-        param_layout = QVBoxLayout(param_section)
-        param_layout.setContentsMargins(14, 12, 14, 12)
-        param_layout.setSpacing(10)
-
-        param_lbl = QLabel(
-            "2. Transformation Settings" if self._needs_column_selector() else "1. Transformation Settings"
-        )
-        param_lbl.setStyleSheet("font-weight: 600; font-size: 14px;")
-        param_layout.addWidget(param_lbl)
-
-        self._build_param_controls(param_layout)
-        right_layout.addWidget(param_section)
-
-        # Section 3: Live Sample Preview
-        preview_section = QFrame()
-        preview_section.setProperty("role", "card")
-        preview_layout = QVBoxLayout(preview_section)
-        preview_layout.setContentsMargins(14, 12, 14, 12)
-        preview_layout.setSpacing(8)
-
-        prev_lbl = QLabel("Live Sample Preview (First 5 Rows)")
-        prev_lbl.setStyleSheet("font-weight: 600; font-size: 14px;")
-        preview_layout.addWidget(prev_lbl)
+        self.content.addWidget(label("PREVIEW — FIRST 5 ROWS", "eyebrow"))
 
         self.preview_table = QTableWidget()
-        self.preview_table.setMaximumHeight(160)
+        self.preview_table.setMaximumHeight(158)
+        self.preview_table.verticalHeader().setVisible(False)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.preview_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
         )
-        preview_layout.addWidget(self.preview_table)
-        right_layout.addWidget(preview_section, stretch=1)
+        self.content.addWidget(self.preview_table)
 
-        # Section 4: Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        btn_layout.addWidget(cancel_btn)
-
-        done_btn = QPushButton("Done — Add to Pipeline")
-        done_btn.setProperty("role", "primary")
-        done_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(done_btn)
-        right_layout.addLayout(btn_layout)
-
-        root.addWidget(right_panel, stretch=1)
+    def _build_caveat(self) -> None:
+        if not self.metadata.warning:
+            return
+        self.content.addWidget(
+            InfoNote(self.metadata.warning, variant="warning", icon=Icon.WARNING)
+        )
 
     # ── Helpers ─────────────────────────────────────────────────────
 
     def _needs_column_selector(self) -> bool:
-        return self.transform_type not in {
-            TransformType.TRIM_WHITESPACE,
-            TransformType.REMOVE_EMPTY_ROWS,
-            TransformType.REMOVE_EMPTY_COLUMNS,
-            TransformType.REMOVE_DUPLICATES,
-            TransformType.REMOVE_COLUMNS,
-            TransformType.RENAME_COLUMNS,
-            TransformType.REORDER_COLUMNS,
-        }
+        return self.transform_type not in _NON_COLUMN_TRANSFORMS
 
     def _is_col_initially_checked(self, col: str) -> bool:
         if self.existing_step:
@@ -316,180 +258,144 @@ class TransformConfigDialog(QDialog):
         return True
 
     def _select_all_cols(self) -> None:
-        for cb in self.column_checkboxes:
-            cb.blockSignals(True)
-            cb.setChecked(True)
-            cb.blockSignals(False)
-        self._update_preview()
+        self._set_all_columns(True)
 
     def _deselect_all_cols(self) -> None:
-        for cb in self.column_checkboxes:
-            cb.blockSignals(True)
-            cb.setChecked(False)
-            cb.blockSignals(False)
+        self._set_all_columns(False)
+
+    def _set_all_columns(self, checked: bool) -> None:
+        for checkbox in self.column_checkboxes:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(checked)
+            checkbox.blockSignals(False)
         self._update_preview()
+
+    def _load_existing_values(self) -> None:
+        """Kept as an explicit hook — controls self-populate on build."""
+
+    def _param_row(
+        self,
+        layout: QVBoxLayout,
+        caption: str,
+        widget: QWidget,
+        key: str,
+    ) -> None:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACE.md)
+
+        caption_lbl = QLabel(caption)
+        caption_lbl.setWordWrap(True)
+        caption_lbl.setMinimumWidth(250)
+        caption_lbl.setMaximumWidth(280)
+        row.addWidget(caption_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        widget.setMinimumWidth(180)
+        row.addWidget(widget, 1)
+
+        layout.addLayout(row)
+        self.param_widgets[key] = widget
 
     def _build_param_controls(self, layout: QVBoxLayout) -> None:
         tt = self.transform_type
+        existing = self.existing_step.params if self.existing_step else {}
 
         if tt == TransformType.FILL_MISSING:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Strategy:"))
             combo = QComboBox()
-            combo.addItems(["value", "mean", "median", "mode", "forward", "backward", "drop"])
-            if self.existing_step:
-                combo.setCurrentText(self.existing_step.params.get("strategy", "value"))
+            combo.addItems(
+                ["value", "mean", "median", "mode", "forward", "backward", "drop"]
+            )
+            combo.setCurrentText(str(existing.get("strategy", "value")))
             combo.currentTextChanged.connect(lambda: self._update_preview())
-            row.addWidget(combo)
-            layout.addLayout(row)
-            self.param_widgets["strategy"] = combo
+            self._param_row(layout, "How should blanks be filled?", combo, "strategy")
 
-            val_row = QHBoxLayout()
-            val_row.addWidget(QLabel("Fallback Value (for 'value' strategy):"))
-            val_edit = QLineEdit()
-            if self.existing_step:
-                val_edit.setText(str(self.existing_step.params.get("value", "")))
-            val_edit.textChanged.connect(lambda: self._update_preview())
-            val_row.addWidget(val_edit)
-            layout.addLayout(val_row)
-            self.param_widgets["value"] = val_edit
+            value_edit = QLineEdit(str(existing.get("value", "")))
+            value_edit.setPlaceholderText("e.g. Unknown")
+            value_edit.textChanged.connect(lambda: self._update_preview())
+            self._param_row(
+                layout,
+                "Fallback value (used by the 'value' strategy)",
+                value_edit,
+                "value",
+            )
 
         elif tt == TransformType.MASK_COLUMN:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Show last N visible characters:"))
             spin = QSpinBox()
             spin.setRange(0, 10)
-            spin.setValue(int(self.existing_step.params.get("show_last", 4)) if self.existing_step else 4)
+            spin.setValue(int(existing.get("show_last", 4)))
             spin.valueChanged.connect(lambda: self._update_preview())
-            row.addWidget(spin)
-            layout.addLayout(row)
-            self.param_widgets["show_last"] = spin
+            self._param_row(
+                layout, "Characters left visible at the end", spin, "show_last"
+            )
 
         elif tt == TransformType.REDACT_COLUMN:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Replacement text:"))
-            edit = QLineEdit("[REDACTED]")
-            if self.existing_step:
-                edit.setText(str(self.existing_step.params.get("replacement", "[REDACTED]")))
+            edit = QLineEdit(str(existing.get("replacement", "[REDACTED]")))
             edit.textChanged.connect(lambda: self._update_preview())
-            row.addWidget(edit)
-            layout.addLayout(row)
-            self.param_widgets["replacement"] = edit
+            self._param_row(layout, "Replace every value with", edit, "replacement")
 
         elif tt == TransformType.PSEUDONYMIZE_COLUMN:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Fake name prefix:"))
-            edit = QLineEdit("Person_")
-            if self.existing_step:
-                edit.setText(str(self.existing_step.params.get("prefix", "Person_")))
+            edit = QLineEdit(str(existing.get("prefix", "Person_")))
             edit.textChanged.connect(lambda: self._update_preview())
-            row.addWidget(edit)
-            layout.addLayout(row)
-            self.param_widgets["prefix"] = edit
+            self._param_row(
+                layout, "Label prefix for the anonymous IDs", edit, "prefix"
+            )
 
         elif tt == TransformType.GENERALIZE_COLUMN:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Round numbers/ages to multiple of:"))
             spin = QSpinBox()
             spin.setRange(1, 1000)
-            spin.setValue(int(self.existing_step.params.get("round_to", 10)) if self.existing_step else 10)
+            spin.setValue(int(existing.get("round_to", 10)))
             spin.valueChanged.connect(lambda: self._update_preview())
-            row.addWidget(spin)
-            layout.addLayout(row)
-            self.param_widgets["round_to"] = spin
+            self._param_row(layout, "Round numbers to the nearest", spin, "round_to")
 
         elif tt == TransformType.SUPPRESS_LOW_COUNTS:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Suppress categories with fewer than N items:"))
             spin = QSpinBox()
             spin.setRange(1, 100)
-            spin.setValue(int(self.existing_step.params.get("threshold", 5)) if self.existing_step else 5)
+            spin.setValue(int(existing.get("threshold", 5)))
             spin.valueChanged.connect(lambda: self._update_preview())
-            row.addWidget(spin)
-            layout.addLayout(row)
-            self.param_widgets["threshold"] = spin
+            self._param_row(
+                layout, "Hide categories with fewer members than", spin, "threshold"
+            )
 
-            r_row = QHBoxLayout()
-            r_row.addWidget(QLabel("Replacement label for rare categories:"))
-            r_edit = QLineEdit("Other")
-            if self.existing_step:
-                r_edit.setText(str(self.existing_step.params.get("replacement", "Other")))
-            r_edit.textChanged.connect(lambda: self._update_preview())
-            r_row.addWidget(r_edit)
-            layout.addLayout(r_row)
-            self.param_widgets["replacement"] = r_edit
+            edit = QLineEdit(str(existing.get("replacement", "Other")))
+            edit.textChanged.connect(lambda: self._update_preview())
+            self._param_row(layout, "Group those rare values as", edit, "replacement")
 
         elif tt == TransformType.REMOVE_DUPLICATES:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Keep duplicate:"))
             combo = QComboBox()
             combo.addItems(["first", "last"])
-            if self.existing_step:
-                combo.setCurrentText(str(self.existing_step.params.get("keep", "first")))
+            combo.setCurrentText(str(existing.get("keep", "first")))
             combo.currentTextChanged.connect(lambda: self._update_preview())
-            row.addWidget(combo)
-            layout.addLayout(row)
-            self.param_widgets["keep"] = combo
+            self._param_row(layout, "Which copy should be kept?", combo, "keep")
 
         elif tt == TransformType.REMOVE_COLUMNS:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Columns to remove (comma separated):"))
-            edit = QLineEdit()
-            edit.setPlaceholderText("col1, col2")
-            if self.existing_step:
-                edit.setText(", ".join(self.existing_step.params.get("columns", [])))
+            edit = QLineEdit(", ".join(existing.get("columns", [])))
+            edit.setPlaceholderText("Notes, Internal ID")
             edit.textChanged.connect(lambda: self._update_preview())
-            row.addWidget(edit)
-            layout.addLayout(row)
-            self.param_widgets["columns"] = edit
+            self._param_row(
+                layout, "Columns to remove (comma separated)", edit, "columns"
+            )
 
         elif tt == TransformType.FILTER_ROWS:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Operator:"))
-            op_combo = QComboBox()
-            op_combo.addItems(["==", "!=", ">", "<", ">=", "<=", "contains", "not_contains"])
-            if self.existing_step:
-                op_combo.setCurrentText(str(self.existing_step.params.get("operator", "==")))
-            op_combo.currentTextChanged.connect(lambda: self._update_preview())
-            row.addWidget(op_combo)
-            layout.addLayout(row)
-            self.param_widgets["operator"] = op_combo
+            combo = QComboBox()
+            combo.addItems(
+                ["==", "!=", ">", "<", ">=", "<=", "contains", "not_contains"]
+            )
+            combo.setCurrentText(str(existing.get("operator", "==")))
+            combo.currentTextChanged.connect(lambda: self._update_preview())
+            self._param_row(layout, "Keep rows where the value is", combo, "operator")
 
-            val_row = QHBoxLayout()
-            val_row.addWidget(QLabel("Value to match:"))
-            val_edit = QLineEdit()
-            if self.existing_step:
-                val_edit.setText(str(self.existing_step.params.get("value", "")))
-            val_edit.textChanged.connect(lambda: self._update_preview())
-            val_row.addWidget(val_edit)
-            layout.addLayout(val_row)
-            self.param_widgets["value"] = val_edit
+            edit = QLineEdit(str(existing.get("value", "")))
+            edit.textChanged.connect(lambda: self._update_preview())
+            self._param_row(layout, "Compared against", edit, "value")
 
         elif tt == TransformType.REPLACE_VALUES:
-            f_row = QHBoxLayout()
-            f_row.addWidget(QLabel("Find text:"))
-            f_edit = QLineEdit()
-            if self.existing_step:
-                f_edit.setText(str(self.existing_step.params.get("find", "")))
-            f_edit.textChanged.connect(lambda: self._update_preview())
-            f_row.addWidget(f_edit)
-            layout.addLayout(f_row)
-            self.param_widgets["find"] = f_edit
+            find_edit = QLineEdit(str(existing.get("find", "")))
+            find_edit.textChanged.connect(lambda: self._update_preview())
+            self._param_row(layout, "Find this text", find_edit, "find")
 
-            r_row = QHBoxLayout()
-            r_row.addWidget(QLabel("Replace with:"))
-            r_edit = QLineEdit()
-            if self.existing_step:
-                r_edit.setText(str(self.existing_step.params.get("replace", "")))
-            r_edit.textChanged.connect(lambda: self._update_preview())
-            r_row.addWidget(r_edit)
-            layout.addLayout(r_row)
-            self.param_widgets["replace"] = r_edit
-
-        else:
-            info_lbl = QLabel("No additional parameters required for this transformation.")
-            info_lbl.setProperty("role", "caption")
-            layout.addWidget(info_lbl)
+            replace_edit = QLineEdit(str(existing.get("replace", "")))
+            replace_edit.textChanged.connect(lambda: self._update_preview())
+            self._param_row(layout, "Replace it with", replace_edit, "replace")
 
     def _gather_params(self) -> dict[str, Any]:
         params: dict[str, Any] = {}
@@ -521,12 +427,14 @@ class TransformConfigDialog(QDialog):
         self.preview_table.clear()
         self.preview_table.setRowCount(len(df))
         self.preview_table.setColumnCount(len(df.columns))
-        self.preview_table.setHorizontalHeaderLabels(list(df.columns))
+        self.preview_table.setHorizontalHeaderLabels([str(c) for c in df.columns])
 
         for row_idx in range(len(df)):
-            for col_idx, col_name in enumerate(df.columns):
-                val = df.iloc[row_idx, col_idx]
-                text_val = "—" if pd.isna(val) else str(val)
+            for col_idx in range(len(df.columns)):
+                value = df.iloc[row_idx, col_idx]
+                text_val = "—" if pd.isna(value) else str(value)
                 item = QTableWidgetItem(text_val)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.preview_table.setItem(row_idx, col_idx, item)
+
+        self.preview_table.resizeColumnsToContents()

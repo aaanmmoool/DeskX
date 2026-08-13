@@ -27,6 +27,13 @@ desktop.ini
 
 # PyInstaller
 *.spec
+!packaging/DeskX.spec
+
+# Packaged releases and generated icon art (rebuilt by packaging/build_*.ps1)
+release/
+packaging/DeskX.ico
+packaging/DeskX.png
+packaging/DeskX.icns
 
 # Coverage
 .coverage

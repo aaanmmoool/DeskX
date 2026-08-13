@@ -6,6 +6,7 @@ Python standard library.  No DeskX imports, no PySide6.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -53,6 +54,44 @@ def humanize_bytes(size_bytes: int) -> str:
             return f"{size_bytes:.2f} {unit}" if unit != "B" else f"{size_bytes} B"
         size_bytes /= factor  # type: ignore[assignment]
     return f"{size_bytes:.2f} PB"
+
+
+def targets_same_file(first: Path, second: Path) -> bool:
+    """Return ``True`` if both paths would write to the same file.
+
+    Unlike ``Path.resolve() ==`` this also treats paths that differ
+    only by letter case as identical, which matters on Windows where
+    ``report.csv`` and ``Report.csv`` are the same file.  It is used to
+    stop the user from picking a destination that would clobber their
+    source file.
+    """
+    left = os.path.normcase(os.path.abspath(str(first)))
+    right = os.path.normcase(os.path.abspath(str(second)))
+    return left == right
+
+
+def next_available_path(path: Path, max_attempts: int = 999) -> Path:
+    """Return *path* if it is free, otherwise the next numbered version.
+
+    >>> next_available_path(Path("out/report.csv"))  # when free
+    WindowsPath('out/report.csv')
+
+    When ``report.csv`` already exists the result becomes
+    ``report (2).csv``, then ``report (3).csv``, and so on.  This backs
+    the "create a new version" choice in the save dialog so an existing
+    output is never silently replaced.
+    """
+    if not path.exists():
+        return path
+
+    stem, suffix, parent = path.stem, path.suffix, path.parent
+    for version in range(2, max_attempts + 1):
+        candidate = parent / f"{stem} ({version}){suffix}"
+        if not candidate.exists():
+            return candidate
+
+    # Pathological case — fall back to a name that cannot collide.
+    return parent / f"{stem} ({max_attempts + 1}){suffix}"
 
 
 def truncate_path(path: Path, max_length: int = 60) -> str:

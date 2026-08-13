@@ -42,6 +42,9 @@ HASH_BUFFER_SIZE: Final[int] = 8 * 1024 * 1024  # 8 MiB read chunks
 # ── Output naming ───────────────────────────────────────────────────
 SANITIZED_SUFFIX: Final[str] = "_sanitized"
 
+# Folder offered as the managed alternative to "same folder as source".
+OUTPUT_DIR_NAME: Final[str] = "Output"
+
 # ── Temporary-file prefix ──────────────────────────────────────────
 TEMP_FILE_PREFIX: Final[str] = ".deskx_tmp_"
 
@@ -64,3 +67,25 @@ def get_app_data_dir() -> Path:
 def get_recent_files_path() -> Path:
     """Return the path to the recent-files JSON store."""
     return get_app_data_dir() / "recent_files.json"
+
+
+def get_documents_dir() -> Path:
+    """Return the user's Documents folder, falling back to the home dir."""
+    if os.name == "nt":
+        documents = Path.home() / "Documents"
+        if documents.is_dir():
+            return documents
+    return Path.home()
+
+
+def get_managed_output_dir(create: bool = False) -> Path:
+    """Return the DeskX-managed output folder (``Documents/DeskX/Output``).
+
+    This is offered alongside "same folder as the source file" in the
+    save dialog.  The directory is only created when *create* is true,
+    so merely displaying the path has no side effects.
+    """
+    output_dir = get_documents_dir() / APP_NAME / OUTPUT_DIR_NAME
+    if create:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
