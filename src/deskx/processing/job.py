@@ -332,17 +332,17 @@ class ProcessingJob:
         """Read the source file via the appropriate adapter."""
         adapter = self._registry.get(self._config.source_path.suffix)
 
-        # Build kwargs based on adapter capabilities
-        kwargs: dict[str, Any] = {}
+        # Honour the import options already carried on JobConfig so GUI
+        # and CLI share one read path through the existing adapters.
+        kwargs: dict[str, Any] = {
+            "sheet_name": self._config.sheet_name,
+        }
         if self._config.header_row is not None:
             kwargs["header_row"] = self._config.header_row
+        if self._config.delimiter is not None:
+            kwargs["delimiter"] = self._config.delimiter
 
-        if hasattr(adapter, "read_full_with_options"):
-            return adapter.read_full_with_options(
-                self._config.source_path, **kwargs
-            )
-
-        return adapter.read_full(self._config.source_path)
+        return adapter.read_full(self._config.source_path, **kwargs)
 
     def _write_output(self, df: pd.DataFrame) -> None:
         """Write transformed data through a temp file."""

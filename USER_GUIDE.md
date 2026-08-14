@@ -170,3 +170,60 @@ When your transformations are ready:
 
 ### Q: What should I do if a column is marked "⚠️ Missing"?
 **A:** Check the table header badge to see how many missing values were detected. You can use **"Fill Missing Values"** from the Transformation Catalog to fill empty cells with a default value or drop incomplete rows.
+
+---
+
+## 9. Command-Line Interface (CLI)
+
+DeskX includes a terminal interface that uses the **same** detector, transforms, adapters, and processing job as the desktop app.
+
+### Install / run options
+
+| Audience | How |
+| :--- | :--- |
+| Developers | `pip install -e ".[dev]"` then `deskx …` |
+| Packaged Windows zip | Unzip and run `.\deskx.exe …` (no Python, no pip) |
+| GUI only | Double-click `DeskX.exe` |
+
+You do **not** need to install pandas yourself when using the packaged `deskx.exe`.
+
+### Interactive sanitize
+
+```bash
+deskx sanitize "C:\Data\customers.xlsx"
+deskx sanitize "C:\Data\customers.csv" --output "C:\Sanitized"
+```
+
+Workflow:
+
+1. Detect sensitive columns (existing detector — no raw values shown)
+2. Pick a column and a transform (Mask / Redact / Hash / Pseudonymize / Remove / Skip)
+3. Configure options when needed (mask length, redact text, pseudonym prefix)
+4. Repeat for other columns
+5. Review — unconfigured detections are left untouched
+6. Choose same folder or another folder (or pass `--output`)
+7. Optionally save a named pipeline
+8. Run `ProcessingJob` and write a new `_sanitized` file
+
+### Repeatable pipeline run
+
+```bash
+deskx transform "C:\Data\customers.xlsx" --pipeline "PII Sanitization"
+```
+
+### Preview and pipeline tools
+
+```bash
+deskx preview "C:\Data\customers.csv"
+deskx preview "C:\Data\book.xlsx" --sheet Customers --rows 10
+deskx pipeline list
+deskx pipeline show "PII Sanitization"
+deskx pipeline validate "PII Sanitization"
+```
+
+### Safety rules (CLI)
+
+- Never prints real emails, phones, or other sensitive cell values
+- Never overwrites the source file
+- Never silently replaces an existing output (creates ` (2)`, ` (3)`, …)
+- Detected columns are **not** transformed unless you explicitly choose an action

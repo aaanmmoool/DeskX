@@ -1,13 +1,11 @@
 <#
 .SYNOPSIS
-    Build the distributable Windows package for DeskX.
+    Build the distributable Windows package for DeskX (GUI + CLI).
 
 .DESCRIPTION
-    Regenerates the app icon, runs PyInstaller against packaging/DeskX.spec,
+    Regenerates the app icon, builds DeskX.exe (GUI) and deskx.exe (CLI),
     drops the end-user readme into the bundle, and zips the result to
     release/DeskX-Windows.zip.
-
-    Run from anywhere; paths are resolved relative to the repo root.
 
 .EXAMPLE
     .\packaging\build_windows.ps1
@@ -35,11 +33,15 @@ foreach ($path in @($Dist, $Build)) {
     if (Test-Path $path) { Remove-Item -Recurse -Force $path }
 }
 
-Write-Host "==> Running PyInstaller (this takes a minute)" -ForegroundColor Cyan
+Write-Host "==> Building GUI (DeskX.exe)" -ForegroundColor Cyan
 Push-Location $Root
 try {
     & $Python -m PyInstaller --noconfirm --clean (Join-Path $Root "packaging\DeskX.spec")
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+    if ($LASTEXITCODE -ne 0) { throw "GUI PyInstaller failed" }
+
+    Write-Host "==> Building CLI (deskx.exe)" -ForegroundColor Cyan
+    & $Python -m PyInstaller --noconfirm --clean (Join-Path $Root "packaging\DeskX-CLI.spec")
+    if ($LASTEXITCODE -ne 0) { throw "CLI PyInstaller failed" }
 }
 finally {
     Pop-Location
@@ -49,6 +51,12 @@ $AppDir = Join-Path $Dist "DeskX"
 if (-not (Test-Path (Join-Path $AppDir "DeskX.exe"))) {
     throw "Expected DeskX.exe was not produced"
 }
+
+$CliExe = Join-Path $Dist "deskx.exe"
+if (-not (Test-Path $CliExe)) {
+    throw "Expected deskx.exe was not produced"
+}
+Copy-Item $CliExe $AppDir -Force
 
 Write-Host "==> Adding end-user readme" -ForegroundColor Cyan
 Copy-Item (Join-Path $Root "packaging\README-FIRST.txt") $AppDir -Force
@@ -61,3 +69,5 @@ Compress-Archive -Path $AppDir -DestinationPath $Zip -CompressionLevel Optimal
 $SizeMb = [math]::Round((Get-Item $Zip).Length / 1MB, 1)
 Write-Host ""
 Write-Host "Done. $Zip ($SizeMb MB)" -ForegroundColor Green
+Write-Host "  GUI: DeskX.exe"
+Write-Host "  CLI: deskx.exe  (open a terminal in this folder and run: .\deskx.exe --help)"

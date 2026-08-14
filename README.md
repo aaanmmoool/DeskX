@@ -3,6 +3,8 @@
 A production-quality, offline-only Windows desktop application that helps
 non-technical users safely sanitize datasets before sharing them.
 
+DeskX also ships a command-line interface for the same engine.
+
 ## Features (Stage 1 + 2)
 
 - **Upload** — Drag-and-drop or browse to select CSV, XLSX, JSON, or TXT files
@@ -11,6 +13,7 @@ non-technical users safely sanitize datasets before sharing them.
 - **Dark / Light theme** — Toggle instantly from the navigation bar
 - **Recent files** — Quickly re-open previously used files
 - **Safe processing** — SHA-256 hashing, temp-file writes, path validation
+- **CLI** — `deskx sanitize`, `deskx preview`, `deskx transform`, `deskx pipeline`
 
 ## Quick Start
 
@@ -34,11 +37,37 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-### Run
+### Run (GUI)
 
 ```bash
 python -m deskx.main
+# or
+deskx-gui
 ```
+
+### Run (CLI)
+
+```bash
+deskx --help
+deskx sanitize "path\to\file.xlsx"
+deskx preview "path\to\file.csv"
+deskx transform "path\to\file.csv" --pipeline "PII Sanitization"
+deskx pipeline list
+```
+
+No second processing engine — the CLI calls the same adapters, detector,
+pipeline, and `ProcessingJob` as the GUI.
+
+### Packaged Windows zip (no Python required)
+
+```powershell
+.\packaging\build_windows.ps1
+```
+
+Unzip `release\DeskX-Windows.zip` and use:
+
+- `DeskX.exe` — desktop app
+- `deskx.exe` — CLI (`.\deskx.exe --help`)
 
 ### Test
 
